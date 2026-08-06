@@ -1,12 +1,14 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+import os
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./chemicals.db"
-
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres.qgdtkwhgszvcywsnuyff:2jerujjGMCny.37@aws-0-eu-west-2.pooler.supabase.com:6543/postgres"
 )
+
+engine = create_engine(DATABASE_URL)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -19,3 +21,6 @@ def get_db():
         yield db
     finally:
         db.close()
+# Replace [YOUR-PASSWORD] with your real Supabase database password
+# DATABASE_URL = "postgresql://postgres:2jerujjGMCny.37@db.qgdtkwhgszvcywsnuyff.supabase.co:5432/postgres"
+
