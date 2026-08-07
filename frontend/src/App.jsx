@@ -22,6 +22,8 @@ function App() {
     hazard_notes: ''
   })
 
+  const API_URL = import.meta.env.VITE_API_URL
+
   const showMessage = (type, text) => {
     setMessage({ type, text })
     setTimeout(() => setMessage(null), 3500)
@@ -30,7 +32,7 @@ function App() {
   const fetchChemicals = async () => {
     try {
       setLoading(true)
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/chemicals`)
+      const res = await fetch(`${API_URL}/chemicals`)
       if (!res.ok) throw new Error('Failed to load chemicals')
       const data = await res.json()
       setChemicals(data)
@@ -81,7 +83,7 @@ function App() {
 
     try {
       if (editingId) {
-        const res = await fetch(`${import.meta.env.VITE_API_URL}/chemicals/${editingId}`, {
+        const res = await fetch(`${API_URL}/chemicals/${editingId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -89,7 +91,7 @@ function App() {
         if (!res.ok) throw new Error()
         showMessage('success', 'Chemical updated successfully')
       } else {
-        const res = await fetch(`${import.meta.env.VITE_API_URL}/chemicals`, {
+        const res = await fetch(`${API_URL}/chemicals`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -123,7 +125,7 @@ function App() {
     if (!window.confirm(`Are you sure you want to delete "${name}"?`)) return
 
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/chemicals/${id}`, {
+      const res = await fetch(`${API_URL}/chemicals/${id}`, {
         method: 'DELETE'
       })
       if (!res.ok) throw new Error()
@@ -139,7 +141,7 @@ function App() {
     formDataUpload.append('file', file)
 
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/chemicals/${id}/upload-sds`, {
+      const res = await fetch(`${API_URL}/chemicals/${id}/upload-sds`, {
         method: 'POST',
         body: formDataUpload
       })
@@ -148,6 +150,20 @@ function App() {
       fetchChemicals()
     } catch (err) {
       showMessage('error', 'Failed to upload SDS')
+    }
+  }
+
+  const handleDownloadSds = async (id) => {
+    try {
+      const res = await fetch(`${API_URL}/chemicals/${id}/sds`)
+      const data = await res.json()
+      if (data.url) {
+        window.open(data.url, '_blank')
+      } else {
+        showMessage('error', 'Could not get SDS file')
+      }
+    } catch (err) {
+      showMessage('error', 'Failed to download SDS')
     }
   }
 
@@ -194,7 +210,7 @@ function App() {
       <header className="header">
         <div>
           <h1>Chemical Inventory</h1>
-          <p>Track chemicals, stock levels & SDS files</p>
+          <p>Track chemicals • Stock levels • SDS files</p>
         </div>
         <button
           className="btn btn-primary"
@@ -358,24 +374,20 @@ function App() {
                         )}
                       </td>
 
-                      {/* ===== Improved SDS Column ===== */}
+                      {/* SDS Column */}
                       <td className="sds-cell">
                         {chem.sds_filename ? (
                           <div className="sds-info">
                             <div className="sds-filename" title={chem.sds_filename}>
-                              {chem.sds_filename.length > 18
-                                ? chem.sds_filename.slice(0, 16) + '...'
-                                : chem.sds_filename}
+                              {chem.sds_filename.split('/').pop()}
                             </div>
                             <div className="sds-actions">
-                              <a
-                                href={`${import.meta.env.VITE_API_URL}/chemicals/${chem.id}/sds`}
-                                target="_blank"
-                                rel="noreferrer"
+                              <button
                                 className="sds-link"
+                                onClick={() => handleDownloadSds(chem.id)}
                               >
                                 Download
-                              </a>
+                              </button>
                               <label className="upload-btn replace-btn">
                                 Replace
                                 <input
