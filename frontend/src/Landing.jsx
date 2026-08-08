@@ -98,23 +98,91 @@ function Landing({ onGetStarted }) {
         </div>
       </section>
 
-      {/* WHY IT MATTERS */}
-      <section className="why-section colorful-why">
+      {/* ========== CHEMICAL STORAGE GUIDE ========== */}
+      <section className="storage-guide">
         <div className="section-inner">
-          <h2>Why proper chemical inventory is critical</h2>
-          <div className="why-content">
-            <p>
-              Storing incompatible chemicals together is one of the most common causes of laboratory accidents. 
-              Acids with bases, oxidizers with flammables, or cyanides with acids can produce toxic gases or violent reactions.
-            </p>
-            <p>A clear inventory system helps you:</p>
+          <h2>Chemical Storage Guide</h2>
+          <p className="section-subtitle">
+            Know what can be stored together — and what must never be mixed
+          </p>
+
+          {/* Compatible */}
+          <div className="storage-block compatible">
+            <h3>✅ Generally Compatible Groups</h3>
+            <p>These groups can usually be stored near each other when properly sealed:</p>
+            <div className="storage-grid">
+              <div className="storage-item">
+                <strong>Flammable Liquids</strong>
+                <span>Alcohols, acetone, ethers, toluene</span>
+              </div>
+              <div className="storage-item">
+                <strong>Organic Acids</strong>
+                <span>Acetic acid, formic acid (away from oxidizers)</span>
+              </div>
+              <div className="storage-item">
+                <strong>Inorganic Bases</strong>
+                <span>Sodium hydroxide, potassium hydroxide</span>
+              </div>
+              <div className="storage-item">
+                <strong>Salts & Stable Solids</strong>
+                <span>Most non-reactive inorganic salts</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Incompatible */}
+          <div className="storage-block incompatible">
+            <h3>🚫 Never Store These Together</h3>
+            <p>These combinations can cause fires, explosions, or toxic gases:</p>
+            
+            <div className="incompatible-list">
+              <div className="incompatible-row">
+                <div className="chem-a">Acids</div>
+                <div className="vs">×</div>
+                <div className="chem-b">Bases / Cyanides</div>
+                <div className="reason">Violent reaction or toxic HCN gas</div>
+              </div>
+              <div className="incompatible-row">
+                <div className="chem-a">Oxidizers</div>
+                <div className="vs">×</div>
+                <div className="chem-b">Flammables / Organics</div>
+                <div className="reason">Fire or explosion risk</div>
+              </div>
+              <div className="incompatible-row">
+                <div className="chem-a">Water-Reactive</div>
+                <div className="vs">×</div>
+                <div className="chem-b">Aqueous solutions</div>
+                <div className="reason">Can release flammable gases</div>
+              </div>
+              <div className="incompatible-row">
+                <div className="chem-a">Chlorine / Bleach</div>
+                <div className="vs">×</div>
+                <div className="chem-b">Ammonia / Acids</div>
+                <div className="reason">Toxic chloramine or chlorine gas</div>
+              </div>
+              <div className="incompatible-row">
+                <div className="chem-a">Peroxides</div>
+                <div className="vs">×</div>
+                <div className="chem-b">Organics / Metals</div>
+                <div className="reason">Explosion hazard</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Why it matters */}
+          <div className="storage-block importance">
+            <h3>Why a proper inventory system matters</h3>
             <ul>
-              <li>Prevent dangerous chemical combinations</li>
-              <li>Know exactly what you have and where it is stored</li>
-              <li>Avoid using expired or degraded reagents</li>
-              <li>Stay ready for safety audits and inspections</li>
-              <li>Reduce unnecessary purchases and waste</li>
+              <li>Prevents incompatible chemicals from being stored together</li>
+              <li>Makes it easy to see location and hazard information quickly</li>
+              <li>Reduces the risk of using expired or degraded reagents</li>
+              <li>Helps laboratories pass safety inspections and audits</li>
+              <li>Saves money by avoiding duplicate purchases and waste</li>
             </ul>
+            <p className="storage-note">
+              Your Chemical Inventory system helps you keep clear records of what you have, 
+              where it is stored, and what hazards it carries — so safer decisions become easier.
+            </p>
           </div>
         </div>
       </section>
