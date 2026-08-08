@@ -2597,3 +2597,90 @@ select:focus-visible {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* =========================================================
+   FIX: Inventory view overflowing / not fitting the screen
+   ========================================================= */
+
+/* Make the toolbar more flexible and wrap cleanly */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.search-wrapper {
+  flex: 1 1 220px;
+  min-width: 180px;
+  max-width: 100%;
+}
+
+.filter-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.toolbar-right {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-left: 0;          /* remove auto so it doesn't force overflow */
+}
+
+/* Make sure select and buttons can shrink */
+.sort-select {
+  max-width: 160px;
+}
+
+/* Table – force horizontal scroll instead of overflowing the page */
+.table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: var(--radius);
+}
+
+.chem-table {
+  min-width: 1100px;       /* keeps columns readable */
+  width: 100%;
+}
+
+/* Prevent the header actions from overflowing */
+.header-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 100%;
+}
+
+.header {
+  gap: 12px;
+}
+
+/* Slightly reduce padding on smaller desktops */
+@media (max-width: 1200px) {
+  .app {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .stat-card {
+    min-width: 90px;
+    padding: 10px 14px;
+  }
+}
+
+/* Extra safety for medium screens */
+@media (max-width: 992px) {
+  .toolbar-right {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .search-wrapper {
+    flex: 1 1 100%;
+  }
+}
