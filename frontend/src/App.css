@@ -2508,3 +2508,201 @@ select:focus-visible {
   font-size: 0.75rem;
   color: var(--text-muted);
 }
+
+/* ==================== EXPORT DROPDOWN ==================== */
+.export-wrapper {
+  position: relative;
+}
+
+.export-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  min-width: 240px;
+  z-index: 100;
+  overflow: hidden;
+  animation: scaleIn 0.15s ease;
+}
+
+.export-dropdown button {
+  width: 100%;
+  text-align: left;
+  padding: 11px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.export-dropdown button:hover {
+  background: var(--bg);
+}
+
+.export-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+/* Better print styles */
+@media print {
+  .header-actions,
+  .toolbar,
+  .stats-bar,
+  .bulk-bar,
+  .app-footer,
+  .notif-wrapper,
+  .export-wrapper,
+  .btn,
+  .icon-btn,
+  .theme-toggle {
+    display: none !important;
+  }
+
+  .app {
+    padding: 0;
+    max-width: 100%;
+  }
+
+  .chem-table {
+    font-size: 11px;
+  }
+
+  .chem-card {
+    break-inside: avoid;
+  }
+}
+
+/* =========================================================
+   MISSING STYLES FOR NEW FEATURES
+   (Dashboard, View Switcher, Compatibility Checker)
+   ========================================================= */
+
+/* View Switcher */
+.view-switcher {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.view-switcher button {
+  padding: 8px 18px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.view-switcher button:hover {
+  color: var(--text);
+  border-color: var(--primary-light);
+}
+
+.view-switcher button.active {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+/* Dashboard */
+.dashboard {
+  margin-bottom: 24px;
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-top: 8px;
+}
+
+@media (max-width: 768px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dash-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: var(--shadow);
+}
+
+.dash-card h3 {
+  margin-bottom: 16px;
+  font-size: 1.1rem;
+  font-weight: 650;
+}
+
+.dash-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dash-item {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dash-item:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+/* Compatibility Checker */
+.compat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.compat-item {
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--bg);
+  border-left: 4px solid var(--border);
+}
+
+.compat-item.risk-high {
+  border-left-color: var(--danger);
+}
+
+.compat-item.risk-medium {
+  border-left-color: var(--warning);
+}
+
+.compat-risk {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 6px;
+  color: var(--text-muted);
+}
+
+.compat-item.risk-high .compat-risk {
+  color: var(--danger);
+}
+
+.compat-item.risk-medium .compat-risk {
+  color: var(--warning);
+}
