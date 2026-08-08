@@ -16,6 +16,11 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState(null)
 
+  // Dark mode
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem('theme') || 'light'
+  })
+
   const [formData, setFormData] = useState({
     name: '',
     cas_number: '',
@@ -29,15 +34,23 @@ function App() {
 
   const API_URL = import.meta.env.VITE_API_URL
 
+  // Apply theme
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    localStorage.setItem('theme', theme)
+  }, [theme])
+
+  const toggleTheme = () => {
+    setTheme(prev => (prev === 'light' ? 'dark' : 'light'))
+  }
+
   // ========== Auth ==========
   useEffect(() => {
-    // Get current session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       setLoadingAuth(false)
     })
 
-    // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session)
     })
@@ -282,13 +295,20 @@ function App() {
           <h1>Chemical Inventory</h1>
           <p>Track chemicals • Stock levels • SDS files</p>
         </div>
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.9rem', color: '#64748b' }}>
+
+        <div className="header-actions">
+          <button className="theme-toggle" onClick={toggleTheme} title="Toggle dark mode">
+            {theme === 'dark' ? '☀️' : '🌙'}
+          </button>
+
+          <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
             {session.user.email}
           </span>
+
           <button className="btn btn-secondary" onClick={handleLogout}>
             Logout
           </button>
+
           <button
             className="btn btn-primary"
             onClick={() => {
