@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from './supabase'
 import Login from './Login'
+import Landing from './Landing'
 import './App.css'
 
 const HAZARD_OPTIONS = [
@@ -16,9 +17,12 @@ const HAZARD_OPTIONS = [
 ]
 
 function App() {
+  // Auth & UI state
   const [session, setSession] = useState(null)
   const [loadingAuth, setLoadingAuth] = useState(true)
+  const [showLogin, setShowLogin] = useState(false)
 
+  // App state
   const [chemicals, setChemicals] = useState([])
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
@@ -28,6 +32,7 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState(null)
 
+  // Theme
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light')
 
   const [formData, setFormData] = useState({
@@ -45,15 +50,15 @@ function App() {
 
   const API_URL = import.meta.env.VITE_API_URL
 
-  // Theme
+  // Apply theme
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem('theme', theme)
   }, [theme])
 
-  const toggleTheme = () => setTheme(prev => prev === 'light' ? 'dark' : 'light')
+  const toggleTheme = () => setTheme(prev => (prev === 'light' ? 'dark' : 'light'))
 
-  // Auth
+  // Auth listener
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
@@ -71,6 +76,7 @@ function App() {
     await supabase.auth.signOut()
     setSession(null)
     setChemicals([])
+    setShowLogin(false)
   }
 
   const showMessage = (type, text) => {
@@ -83,7 +89,7 @@ function App() {
     return session?.access_token
   }
 
-  // API
+  // ========== API ==========
   const fetchChemicals = async () => {
     try {
       setLoading(true)
@@ -238,7 +244,7 @@ function App() {
     }
   }
 
-  // Filtering + Search (improved)
+  // Filtering
   const isExpired = (c) => c.expiry_date && new Date(c.expiry_date) < new Date()
   const isLow = (c) => c.quantity <= c.min_stock
   const isExpiringSoon = (c) => {
@@ -249,16 +255,16 @@ function App() {
 
   let filtered = chemicals.filter(c => {
     const q = search.toLowerCase()
-    const matchesSearch =
+    const matches =
       c.name.toLowerCase().includes(q) ||
       (c.cas_number && c.cas_number.toLowerCase().includes(q)) ||
       (c.molecular_formula && c.molecular_formula.toLowerCase().includes(q)) ||
       (c.hazard_notes && c.hazard_notes.toLowerCase().includes(q))
 
-    if (filter === 'low') return matchesSearch && isLow(c)
-    if (filter === 'expired') return matchesSearch && isExpired(c)
-    if (filter === 'soon') return matchesSearch && isExpiringSoon(c)
-    return matchesSearch
+    if (filter === 'low') return matches && isLow(c)
+    if (filter === 'expired') return matches && isExpired(c)
+    if (filter === 'soon') return matches && isExpiringSoon(c)
+    return matches
   })
 
   filtered = [...filtered].sort((a, b) => {
@@ -272,6 +278,8 @@ function App() {
     return 0
   })
 
+  // ========== RENDER ==========
+
   if (loadingAuth) {
     return (
       <div className="loading" style={{ minHeight: '100vh' }}>
@@ -281,10 +289,15 @@ function App() {
     )
   }
 
+  // Not logged in → show Landing or Login
   if (!session) {
+    if (!showLogin) {
+      return <Landing onGetStarted={() => setShowLogin(true)} />
+    }
     return <Login onLogin={setSession} />
   }
 
+  // Logged in → Main App
   return (
     <div className="app">
       {message && <div className={`toast ${message.type}`}>{message.text}</div>}
@@ -351,7 +364,7 @@ function App() {
               </div>
               <div className="form-group">
                 <label>Molecular Formula</label>
-                <input name="molecular_formula" value={formData.molecular_formula} onChange={handleChange} placeholder="e.g. H2SO4" />
+                <input name="molecular_formula" value={formData.molecular_formula} onChange={handleChange} placeholder="e.g. H₂SO₄" />
               </div>
               <div className="form-group">
                 <label>Quantity</label>
@@ -385,7 +398,6 @@ function App() {
               </div>
             </div>
 
-            {/* Hazard Symbols */}
             <div style={{ marginBottom: '20px' }}>
               <label style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-muted)', marginBottom: '10px', display: 'block' }}>
                 Hazard Symbols
@@ -405,7 +417,8 @@ function App() {
                       fontSize: '0.85rem',
                       display: 'flex',
                       alignItems: 'center',
-                      gap: '6px'
+                      gap: '6px',
+                      color: 'var(--text)'
                     }}
                   >
                     <span>{h.emoji}</span> {h.label}
@@ -437,7 +450,7 @@ function App() {
                 <th>Name</th>
                 <th>Formula</th>
                 <th>CAS</th>
-                <th>Quantity</th>
+                <th>Qty</th>
                 <th>Location</th>
                 <th>Expiry</th>
                 <th>Hazards</th>
@@ -477,7 +490,7 @@ function App() {
                         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                           {(chem.hazard_symbols || []).map(id => {
                             const h = HAZARD_OPTIONS.find(x => x.id === id)
-                            return h ? <span key={id} title={h.label}>{h.emoji}</span> : null
+                            return h ? <span key={id} title={h.label} style={{ fontSize: '1.1rem' }}>{h.emoji}</span> : null
                           })}
                         </div>
                       </td>
