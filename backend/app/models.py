@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, Float, Date, Text
+from sqlalchemy.dialects.postgresql import ARRAY
 from .database import Base
 
 
@@ -15,3 +16,6 @@ class Chemical(Base):
     min_stock = Column(Float, default=0.0)
     hazard_notes = Column(Text, nullable=True)
     sds_filename = Column(String, nullable=True)
+    molecular_formula = Column(String, nullable=True)
+    hazard_symbols = Column(ARRAY(String), nullable=True)
+    user_id = Column(String, nullable=True)  # kept for compatibility

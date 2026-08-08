@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import date
 
 
@@ -12,6 +12,8 @@ class ChemicalBase(BaseModel):
     expiry_date: Optional[date] = None
     min_stock: float = 0.0
     hazard_notes: Optional[str] = None
+    molecular_formula: Optional[str] = None
+    hazard_symbols: Optional[List[str]] = None
 
 
 class ChemicalCreate(ChemicalBase):
@@ -27,6 +29,8 @@ class ChemicalUpdate(BaseModel):
     expiry_date: Optional[date] = None
     min_stock: Optional[float] = None
     hazard_notes: Optional[str] = None
+    molecular_formula: Optional[str] = None
+    hazard_symbols: Optional[List[str]] = None
 
 
 class Chemical(ChemicalBase):
