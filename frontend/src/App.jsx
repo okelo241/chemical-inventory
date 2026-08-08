@@ -3,6 +3,18 @@ import { supabase } from './supabase'
 import Login from './Login'
 import './App.css'
 
+const HAZARD_OPTIONS = [
+  { id: 'explosive', label: 'Explosive', emoji: '💥' },
+  { id: 'flammable', label: 'Flammable', emoji: '🔥' },
+  { id: 'oxidizing', label: 'Oxidizing', emoji: '⚗️' },
+  { id: 'gas', label: 'Compressed Gas', emoji: '🧴' },
+  { id: 'corrosive', label: 'Corrosive', emoji: '🧪' },
+  { id: 'toxic', label: 'Toxic', emoji: '☠️' },
+  { id: 'harmful', label: 'Harmful / Irritant', emoji: '⚠️' },
+  { id: 'health', label: 'Health Hazard', emoji: '🫁' },
+  { id: 'environmental', label: 'Environmental', emoji: '🌍' },
+]
+
 function App() {
   const [session, setSession] = useState(null)
   const [loadingAuth, setLoadingAuth] = useState(true)
@@ -16,10 +28,7 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState(null)
 
-  // Dark mode
-  const [theme, setTheme] = useState(() => {
-    return localStorage.getItem('theme') || 'light'
-  })
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light')
 
   const [formData, setFormData] = useState({
     name: '',
@@ -29,22 +38,22 @@ function App() {
     location: '',
     expiry_date: '',
     min_stock: '',
-    hazard_notes: ''
+    hazard_notes: '',
+    molecular_formula: '',
+    hazard_symbols: []
   })
 
   const API_URL = import.meta.env.VITE_API_URL
 
-  // Apply theme
+  // Theme
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
     localStorage.setItem('theme', theme)
   }, [theme])
 
-  const toggleTheme = () => {
-    setTheme(prev => (prev === 'light' ? 'dark' : 'light'))
-  }
+  const toggleTheme = () => setTheme(prev => prev === 'light' ? 'dark' : 'light')
 
-  // ========== Auth ==========
+  // Auth
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
@@ -64,7 +73,6 @@ function App() {
     setChemicals([])
   }
 
-  // ========== Helpers ==========
   const showMessage = (type, text) => {
     setMessage({ type, text })
     setTimeout(() => setMessage(null), 3500)
@@ -75,21 +83,18 @@ function App() {
     return session?.access_token
   }
 
-  // ========== API Calls ==========
+  // API
   const fetchChemicals = async () => {
     try {
       setLoading(true)
       const token = await getAccessToken()
       const res = await fetch(`${API_URL}/chemicals`, {
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
+        headers: { Authorization: `Bearer ${token}` }
       })
-      if (!res.ok) throw new Error('Failed to load chemicals')
+      if (!res.ok) throw new Error()
       const data = await res.json()
       setChemicals(data)
     } catch (err) {
-      console.error(err)
       showMessage('error', 'Could not load chemicals')
     } finally {
       setLoading(false)
@@ -97,13 +102,21 @@ function App() {
   }
 
   useEffect(() => {
-    if (session) {
-      fetchChemicals()
-    }
+    if (session) fetchChemicals()
   }, [session])
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value })
+  }
+
+  const toggleHazard = (id) => {
+    setFormData(prev => {
+      const current = prev.hazard_symbols || []
+      if (current.includes(id)) {
+        return { ...prev, hazard_symbols: current.filter(h => h !== id) }
+      }
+      return { ...prev, hazard_symbols: [...current, id] }
+    })
   }
 
   const resetForm = () => {
@@ -115,7 +128,9 @@ function App() {
       location: '',
       expiry_date: '',
       min_stock: '',
-      hazard_notes: ''
+      hazard_notes: '',
+      molecular_formula: '',
+      hazard_symbols: []
     })
     setEditingId(null)
     setShowForm(false)
@@ -133,37 +148,29 @@ function App() {
       location: formData.location || null,
       expiry_date: formData.expiry_date || null,
       min_stock: parseFloat(formData.min_stock) || 0,
-      hazard_notes: formData.hazard_notes || null
+      hazard_notes: formData.hazard_notes || null,
+      molecular_formula: formData.molecular_formula || null,
+      hazard_symbols: formData.hazard_symbols.length > 0 ? formData.hazard_symbols : null
     }
 
     try {
-      if (editingId) {
-        const res = await fetch(`${API_URL}/chemicals/${editingId}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`
-          },
-          body: JSON.stringify(payload)
-        })
-        if (!res.ok) throw new Error()
-        showMessage('success', 'Chemical updated successfully')
-      } else {
-        const res = await fetch(`${API_URL}/chemicals`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`
-          },
-          body: JSON.stringify(payload)
-        })
-        if (!res.ok) throw new Error()
-        showMessage('success', 'Chemical added successfully')
-      }
+      const url = editingId ? `${API_URL}/chemicals/${editingId}` : `${API_URL}/chemicals`
+      const method = editingId ? 'PUT' : 'POST'
+
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(payload)
+      })
+      if (!res.ok) throw new Error()
+      showMessage('success', editingId ? 'Chemical updated' : 'Chemical added')
       resetForm()
       fetchChemicals()
     } catch (err) {
-      showMessage('error', 'Something went wrong. Please try again.')
+      showMessage('error', 'Something went wrong')
     }
   }
 
@@ -176,45 +183,44 @@ function App() {
       location: chem.location || '',
       expiry_date: chem.expiry_date || '',
       min_stock: chem.min_stock || '',
-      hazard_notes: chem.hazard_notes || ''
+      hazard_notes: chem.hazard_notes || '',
+      molecular_formula: chem.molecular_formula || '',
+      hazard_symbols: chem.hazard_symbols || []
     })
     setEditingId(chem.id)
     setShowForm(true)
   }
 
   const handleDelete = async (id, name) => {
-    if (!window.confirm(`Are you sure you want to delete "${name}"?`)) return
+    if (!window.confirm(`Delete "${name}"?`)) return
     const token = await getAccessToken()
-
     try {
-      const res = await fetch(`${API_URL}/chemicals/${id}`, {
+      await fetch(`${API_URL}/chemicals/${id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
       })
-      if (!res.ok) throw new Error()
       showMessage('success', `"${name}" deleted`)
       fetchChemicals()
     } catch (err) {
-      showMessage('error', 'Failed to delete chemical')
+      showMessage('error', 'Failed to delete')
     }
   }
 
   const handleSdsUpload = async (id, file) => {
     const token = await getAccessToken()
-    const formDataUpload = new FormData()
-    formDataUpload.append('file', file)
-
+    const fd = new FormData()
+    fd.append('file', file)
     try {
       const res = await fetch(`${API_URL}/chemicals/${id}/upload-sds`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
-        body: formDataUpload
+        body: fd
       })
       if (!res.ok) throw new Error()
-      showMessage('success', 'SDS uploaded successfully')
+      showMessage('success', 'SDS uploaded')
       fetchChemicals()
     } catch (err) {
-      showMessage('error', 'Failed to upload SDS')
+      showMessage('error', 'Upload failed')
     }
   }
 
@@ -225,31 +231,29 @@ function App() {
         headers: { Authorization: `Bearer ${token}` }
       })
       const data = await res.json()
-      if (data.url) {
-        window.open(data.url, '_blank')
-      } else {
-        showMessage('error', 'Could not get SDS file')
-      }
+      if (data.url) window.open(data.url, '_blank')
+      else showMessage('error', 'File not found')
     } catch (err) {
-      showMessage('error', 'Failed to download SDS')
+      showMessage('error', 'Download failed')
     }
   }
 
-  // ========== Filtering & Sorting ==========
-  const isExpired = (chem) => chem.expiry_date && new Date(chem.expiry_date) < new Date()
-  const isLow = (chem) => chem.quantity <= chem.min_stock
-  const isExpiringSoon = (chem) => {
-    if (!chem.expiry_date) return false
-    const expiry = new Date(chem.expiry_date)
-    const today = new Date()
-    const diffDays = (expiry - today) / (1000 * 60 * 60 * 24)
-    return diffDays > 0 && diffDays <= 30
+  // Filtering + Search (improved)
+  const isExpired = (c) => c.expiry_date && new Date(c.expiry_date) < new Date()
+  const isLow = (c) => c.quantity <= c.min_stock
+  const isExpiringSoon = (c) => {
+    if (!c.expiry_date) return false
+    const diff = (new Date(c.expiry_date) - new Date()) / (1000 * 60 * 60 * 24)
+    return diff > 0 && diff <= 30
   }
 
-  let filteredChemicals = chemicals.filter(c => {
+  let filtered = chemicals.filter(c => {
+    const q = search.toLowerCase()
     const matchesSearch =
-      c.name.toLowerCase().includes(search.toLowerCase()) ||
-      (c.cas_number && c.cas_number.includes(search))
+      c.name.toLowerCase().includes(q) ||
+      (c.cas_number && c.cas_number.toLowerCase().includes(q)) ||
+      (c.molecular_formula && c.molecular_formula.toLowerCase().includes(q)) ||
+      (c.hazard_notes && c.hazard_notes.toLowerCase().includes(q))
 
     if (filter === 'low') return matchesSearch && isLow(c)
     if (filter === 'expired') return matchesSearch && isExpired(c)
@@ -257,7 +261,7 @@ function App() {
     return matchesSearch
   })
 
-  filteredChemicals = [...filteredChemicals].sort((a, b) => {
+  filtered = [...filtered].sort((a, b) => {
     if (sortBy === 'name') return a.name.localeCompare(b.name)
     if (sortBy === 'quantity') return b.quantity - a.quantity
     if (sortBy === 'expiry') {
@@ -268,7 +272,6 @@ function App() {
     return 0
   })
 
-  // ========== Render ==========
   if (loadingAuth) {
     return (
       <div className="loading" style={{ minHeight: '100vh' }}>
@@ -279,16 +282,12 @@ function App() {
   }
 
   if (!session) {
-    return <Login onLogin={(session) => setSession(session)} />
+    return <Login onLogin={setSession} />
   }
 
   return (
     <div className="app">
-      {message && (
-        <div className={`toast ${message.type}`}>
-          {message.text}
-        </div>
-      )}
+      {message && <div className={`toast ${message.type}`}>{message.text}</div>}
 
       <header className="header">
         <div>
@@ -297,25 +296,14 @@ function App() {
         </div>
 
         <div className="header-actions">
-          <button className="theme-toggle" onClick={toggleTheme} title="Toggle dark mode">
+          <button className="theme-toggle" onClick={toggleTheme} title="Toggle theme">
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>
-
           <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
             {session.user.email}
           </span>
-
-          <button className="btn btn-secondary" onClick={handleLogout}>
-            Logout
-          </button>
-
-          <button
-            className="btn btn-primary"
-            onClick={() => {
-              resetForm()
-              setShowForm(true)
-            }}
-          >
+          <button className="btn btn-secondary" onClick={handleLogout}>Logout</button>
+          <button className="btn btn-primary" onClick={() => { resetForm(); setShowForm(true) }}>
             + Add Chemical
           </button>
         </div>
@@ -323,17 +311,13 @@ function App() {
 
       <div className="toolbar">
         <div className="stats">
-          <span className="stat-item">
-            Total: <strong>{chemicals.length}</strong>
-          </span>
-          <span className="stat-item">
-            Showing: <strong>{filteredChemicals.length}</strong>
-          </span>
+          <span className="stat-item">Total: <strong>{chemicals.length}</strong></span>
+          <span className="stat-item">Showing: <strong>{filtered.length}</strong></span>
         </div>
 
         <input
           className="search"
-          placeholder="Search by name or CAS..."
+          placeholder="Search name, CAS, formula, hazards..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
@@ -345,11 +329,7 @@ function App() {
           <button className={filter === 'expired' ? 'active' : ''} onClick={() => setFilter('expired')}>Expired</button>
         </div>
 
-        <select
-          className="sort-select"
-          value={sortBy}
-          onChange={(e) => setSortBy(e.target.value)}
-        >
+        <select className="sort-select" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
           <option value="name">Sort by Name</option>
           <option value="quantity">Sort by Quantity</option>
           <option value="expiry">Sort by Expiry</option>
@@ -368,6 +348,10 @@ function App() {
               <div className="form-group">
                 <label>CAS Number</label>
                 <input name="cas_number" value={formData.cas_number} onChange={handleChange} />
+              </div>
+              <div className="form-group">
+                <label>Molecular Formula</label>
+                <input name="molecular_formula" value={formData.molecular_formula} onChange={handleChange} placeholder="e.g. H2SO4" />
               </div>
               <div className="form-group">
                 <label>Quantity</label>
@@ -401,6 +385,35 @@ function App() {
               </div>
             </div>
 
+            {/* Hazard Symbols */}
+            <div style={{ marginBottom: '20px' }}>
+              <label style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-muted)', marginBottom: '10px', display: 'block' }}>
+                Hazard Symbols
+              </label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                {HAZARD_OPTIONS.map(h => (
+                  <button
+                    type="button"
+                    key={h.id}
+                    onClick={() => toggleHazard(h.id)}
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      border: formData.hazard_symbols?.includes(h.id) ? '2px solid var(--primary)' : '1px solid var(--border)',
+                      background: formData.hazard_symbols?.includes(h.id) ? 'rgba(37,99,235,0.1)' : 'var(--card)',
+                      cursor: 'pointer',
+                      fontSize: '0.85rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}
+                  >
+                    <span>{h.emoji}</span> {h.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="form-actions">
               <button type="button" className="btn btn-secondary" onClick={resetForm}>Cancel</button>
               <button type="submit" className="btn btn-primary">
@@ -422,19 +435,21 @@ function App() {
             <thead>
               <tr>
                 <th>Name</th>
+                <th>Formula</th>
                 <th>CAS</th>
                 <th>Quantity</th>
                 <th>Location</th>
                 <th>Expiry</th>
+                <th>Hazards</th>
                 <th>Status</th>
                 <th>SDS</th>
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {filteredChemicals.length === 0 ? (
+              {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="empty">
+                  <td colSpan="10" className="empty">
                     <div className="empty-state">
                       <p>No chemicals found</p>
                       <span>Try changing the search or filter, or add a new chemical.</span>
@@ -442,83 +457,58 @@ function App() {
                   </td>
                 </tr>
               ) : (
-                filteredChemicals.map(chem => {
+                filtered.map(chem => {
                   const expired = isExpired(chem)
                   const low = isLow(chem)
                   const soon = isExpiringSoon(chem)
 
                   return (
-                    <tr
-                      key={chem.id}
-                      className={expired ? 'row-expired' : low ? 'row-low' : soon ? 'row-soon' : ''}
-                    >
+                    <tr key={chem.id} className={expired ? 'row-expired' : low ? 'row-low' : soon ? 'row-soon' : ''}>
                       <td>
                         <strong>{chem.name}</strong>
                         {chem.hazard_notes && <div className="hazard">{chem.hazard_notes}</div>}
                       </td>
+                      <td>{chem.molecular_formula || '—'}</td>
                       <td>{chem.cas_number || '—'}</td>
                       <td>{chem.quantity} {chem.unit}</td>
                       <td>{chem.location || '—'}</td>
                       <td>{chem.expiry_date || '—'}</td>
                       <td>
-                        {expired ? (
-                          <span className="badge badge-red">Expired</span>
-                        ) : low ? (
-                          <span className="badge badge-orange">Low Stock</span>
-                        ) : soon ? (
-                          <span className="badge badge-yellow">Expiring Soon</span>
-                        ) : (
-                          <span className="badge badge-green">OK</span>
-                        )}
+                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                          {(chem.hazard_symbols || []).map(id => {
+                            const h = HAZARD_OPTIONS.find(x => x.id === id)
+                            return h ? <span key={id} title={h.label}>{h.emoji}</span> : null
+                          })}
+                        </div>
                       </td>
-
+                      <td>
+                        {expired ? <span className="badge badge-red">Expired</span> :
+                         low ? <span className="badge badge-orange">Low Stock</span> :
+                         soon ? <span className="badge badge-yellow">Expiring Soon</span> :
+                         <span className="badge badge-green">OK</span>}
+                      </td>
                       <td className="sds-cell">
                         {chem.sds_filename ? (
                           <div className="sds-info">
-                            <div className="sds-filename" title={chem.sds_filename}>
-                              {chem.sds_filename.split('/').pop()}
-                            </div>
+                            <div className="sds-filename">{chem.sds_filename.split('/').pop()}</div>
                             <div className="sds-actions">
-                              <button className="sds-link" onClick={() => handleDownloadSds(chem.id)}>
-                                Download
-                              </button>
+                              <button className="sds-link" onClick={() => handleDownloadSds(chem.id)}>Download</button>
                               <label className="upload-btn replace-btn">
                                 Replace
-                                <input
-                                  type="file"
-                                  accept=".pdf"
-                                  hidden
-                                  onChange={(e) => {
-                                    if (e.target.files[0]) {
-                                      handleSdsUpload(chem.id, e.target.files[0])
-                                    }
-                                  }}
-                                />
+                                <input type="file" accept=".pdf" hidden onChange={(e) => e.target.files[0] && handleSdsUpload(chem.id, e.target.files[0])} />
                               </label>
                             </div>
                           </div>
                         ) : (
                           <label className="upload-btn">
                             Upload SDS
-                            <input
-                              type="file"
-                              accept=".pdf"
-                              hidden
-                              onChange={(e) => {
-                                if (e.target.files[0]) {
-                                  handleSdsUpload(chem.id, e.target.files[0])
-                                }
-                              }}
-                            />
+                            <input type="file" accept=".pdf" hidden onChange={(e) => e.target.files[0] && handleSdsUpload(chem.id, e.target.files[0])} />
                           </label>
                         )}
                       </td>
-
                       <td className="actions">
                         <button className="btn-sm" onClick={() => handleEdit(chem)}>Edit</button>
-                        <button className="btn-sm btn-danger" onClick={() => handleDelete(chem.id, chem.name)}>
-                          Delete
-                        </button>
+                        <button className="btn-sm btn-danger" onClick={() => handleDelete(chem.id, chem.name)}>Delete</button>
                       </td>
                     </tr>
                   )
