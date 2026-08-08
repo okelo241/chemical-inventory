@@ -2599,88 +2599,102 @@ select:focus-visible {
 }
 
 /* =========================================================
-   FIX: Inventory view overflowing / not fitting the screen
+   STRONG FIX – Inventory view overflowing
    ========================================================= */
 
-/* Make the toolbar more flexible and wrap cleanly */
+/* 1. Force the whole app to respect the viewport */
+.app {
+  max-width: 100%;
+  width: 100%;
+  padding-left: 16px;
+  padding-right: 16px;
+  overflow-x: hidden; /* prevent page-level horizontal scroll */
+}
+
+/* 2. Header – allow it to wrap cleanly */
+.header {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.header-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+/* 3. Toolbar – make it stack properly */
 .toolbar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  align-items: center;
-  margin-bottom: 20px;
+  flex-direction: column;          /* stack on most screens */
+  gap: 12px;
+  align-items: stretch;
 }
 
 .search-wrapper {
-  flex: 1 1 220px;
-  min-width: 180px;
+  width: 100%;
   max-width: 100%;
+  flex: none;
 }
 
 .filter-pills {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  width: 100%;
 }
 
 .toolbar-right {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  align-items: center;
-  margin-left: 0;          /* remove auto so it doesn't force overflow */
+  width: 100%;
+  margin-left: 0 !important;
+  justify-content: flex-start;
 }
 
-/* Make sure select and buttons can shrink */
-.sort-select {
-  max-width: 160px;
-}
-
-/* Table – force horizontal scroll instead of overflowing the page */
+/* 4. Table – always allow horizontal scroll */
 .table-wrapper {
   width: 100%;
-  overflow-x: auto;
+  max-width: 100%;
+  overflow-x: auto !important;
   -webkit-overflow-scrolling: touch;
   border-radius: var(--radius);
+  position: relative;
 }
 
 .chem-table {
-  min-width: 1100px;       /* keeps columns readable */
-  width: 100%;
+  min-width: 1200px; /* keeps columns readable */
+  width: max-content;
+  max-width: none;
 }
 
-/* Prevent the header actions from overflowing */
-.header-actions {
+/* 5. Stats bar – prevent it from pushing things */
+.stats-bar {
   flex-wrap: wrap;
-  justify-content: flex-end;
-  max-width: 100%;
+  gap: 10px;
 }
 
-.header {
-  gap: 12px;
+.stat-card {
+  flex: 1 1 100px;
+  min-width: 100px;
 }
 
-/* Slightly reduce padding on smaller desktops */
-@media (max-width: 1200px) {
-  .app {
-    padding-left: 16px;
-    padding-right: 16px;
-  }
-
-  .stat-card {
-    min-width: 90px;
-    padding: 10px 14px;
-  }
-}
-
-/* Extra safety for medium screens */
-@media (max-width: 992px) {
-  .toolbar-right {
-    width: 100%;
-    justify-content: flex-start;
+/* 6. On larger screens allow toolbar to go horizontal again */
+@media (min-width: 1100px) {
+  .toolbar {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
   }
 
   .search-wrapper {
-    flex: 1 1 100%;
+    flex: 1 1 240px;
+    max-width: 320px;
+  }
+
+  .toolbar-right {
+    width: auto;
+    margin-left: auto !important;
   }
 }
