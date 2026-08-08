@@ -68,6 +68,17 @@ const formatDate = (dateStr) => {
   })
 }
 
+const formatDateTime = (dateStr) => {
+  if (!dateStr) return '—'
+  return new Date(dateStr).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 const isExpired = (c) => c.expiry_date && daysUntil(c.expiry_date) < 0
 const isLow = (c) => Number(c.quantity) <= Number(c.min_stock || 0)
 const isExpiringSoon = (c) => {
@@ -87,6 +98,7 @@ function App() {
 
   // ── Data ────────────────────────────────────────────────
   const [chemicals, setChemicals] = useState([])
+  const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -102,6 +114,29 @@ function App() {
   const [commandOpen, setCommandOpen] = useState(false)
   const [hazardLegendOpen, setHazardLegendOpen] = useState(false)
   const [bulkMode, setBulkMode] = useState(false)
+
+  // ── Notifications ───────────────────────────────────────
+  const [notifications, setNotifications] = useState([])
+  const [notifOpen, setNotifOpen] = useState(false)
+  const [notifPermission, setNotifPermission] = useState(
+    typeof Notification !== 'undefined' ? Notification.permission : 'default'
+  )
+  const [notificationsEnabled, setNotificationsEnabled] = useState(
+    () => localStorage.getItem('notificationsEnabled') !== 'false'
+  )
+
+  // ── Usage / Transaction Log ─────────────────────────────
+  const [showUsageModal, setShowUsageModal] = useState(false)
+  const [usageChem, setUsageChem] = useState(null)
+  const [usageForm, setUsageForm] = useState({
+    type: 'take',
+    quantity: '',
+    notes: '',
+  })
+  const [showHistory, setShowHistory] = useState(false)
+  const [historyFilter, setHistoryFilter] = useState('all')
+  const [historySearch, setHistorySearch] = useState('')
+  const [loggingUsage, setLoggingUsage] = useState(false)
 
   // ── Theme ───────────────────────────────────────────────
   const [theme, setTheme] = useState(() => {
@@ -120,6 +155,7 @@ function App() {
   const searchRef = useRef(null)
   const formRef = useRef(null)
   const toastTimeout = useRef(null)
+  const notifRef = useRef(null)
 
   const API_URL = import.meta.env.VITE_API_URL
 
@@ -161,9 +197,11 @@ function App() {
     await supabase.auth.signOut()
     setSession(null)
     setChemicals([])
+    setTransactions([])
     setSelectedIds(new Set())
     setShowLogin(false)
     setShowForm(false)
+    setNotifications([])
   }
 
   const getAccessToken = useCallback(async () => {
@@ -182,6 +220,145 @@ function App() {
     setMessage({ type, text, id: Date.now() })
     toastTimeout.current = setTimeout(() => setMessage(null), 3800)
   }, [])
+
+  /* ─────────────────────────────────────────────────────────
+     Notifications
+  ───────────────────────────────────────────────────────── */
+
+  const createNotification = (type, title, message, chemId = null) => {
+    const id = `${type}-${chemId || Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    return {
+      id,
+      type,
+      title,
+      message,
+      chemId,
+      createdAt: new Date().toISOString(),
+      read: false,
+    }
+  }
+
+  const checkAndNotify = useCallback(
+    (chems) => {
+      if (!notificationsEnabled || !chems?.length) return
+
+      const newNotifs = []
+
+      chems.forEach((c) => {
+        if (isExpired(c)) {
+          newNotifs.push(
+            createNotification(
+              'expired',
+              'Chemical Expired',
+              `"${c.name}" expired on ${formatDate(c.expiry_date)}`,
+              c.id
+            )
+          )
+        } else if (isExpiringSoon(c)) {
+          const days = daysUntil(c.expiry_date)
+          newNotifs.push(
+            createNotification(
+              'soon',
+              'Expiring Soon',
+              `"${c.name}" expires in ${days} day${days !== 1 ? 's' : ''}`,
+              c.id
+            )
+          )
+        }
+
+        if (isLow(c)) {
+          newNotifs.push(
+            createNotification(
+              'low',
+              'Low Stock',
+              `"${c.name}" is low (${c.quantity} ${c.unit} left)`,
+              c.id
+            )
+          )
+        }
+      })
+
+      setNotifications((prev) => {
+        const existingKeys = new Set(prev.map((n) => `${n.type}-${n.chemId}`))
+        const uniqueNew = newNotifs.filter((n) => !existingKeys.has(`${n.type}-${n.chemId}`))
+
+        if (uniqueNew.length === 0) return prev
+
+        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          uniqueNew.forEach((n) => {
+            try {
+              new Notification(n.title, {
+                body: n.message,
+                tag: n.id,
+              })
+            } catch (e) {}
+          })
+        }
+
+        return [...uniqueNew, ...prev].slice(0, 50)
+      })
+    },
+    [notificationsEnabled]
+  )
+
+  useEffect(() => {
+    if (chemicals.length > 0) checkAndNotify(chemicals)
+  }, [chemicals, checkAndNotify])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (chemicals.length > 0) checkAndNotify(chemicals)
+    }, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [chemicals, checkAndNotify])
+
+  const requestNotificationPermission = async () => {
+    if (!('Notification' in window)) {
+      showMessage('error', 'This browser does not support notifications')
+      return
+    }
+    const permission = await Notification.requestPermission()
+    setNotifPermission(permission)
+    if (permission === 'granted') {
+      showMessage('success', 'Browser notifications enabled')
+      setNotificationsEnabled(true)
+      localStorage.setItem('notificationsEnabled', 'true')
+      checkAndNotify(chemicals)
+    } else {
+      showMessage('error', 'Notification permission denied')
+    }
+  }
+
+  const toggleNotifications = () => {
+    const next = !notificationsEnabled
+    setNotificationsEnabled(next)
+    localStorage.setItem('notificationsEnabled', String(next))
+    if (next && notifPermission !== 'granted') {
+      requestNotificationPermission()
+    }
+  }
+
+  const markAsRead = (id) => {
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)))
+  }
+
+  const markAllRead = () => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
+  }
+
+  const clearNotifications = () => setNotifications([])
+
+  const unreadCount = notifications.filter((n) => !n.read).length
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (notifRef.current && !notifRef.current.contains(e.target)) {
+        setNotifOpen(false)
+      }
+    }
+    if (notifOpen) document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [notifOpen])
 
   /* ─────────────────────────────────────────────────────────
      API Layer
@@ -212,9 +389,27 @@ function App() {
     [API_URL, getAccessToken, showMessage]
   )
 
+  const fetchTransactions = useCallback(async () => {
+    try {
+      const token = await getAccessToken()
+      const res = await fetch(`${API_URL}/transactions`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setTransactions(Array.isArray(data) ? data : [])
+    } catch (err) {
+      // Backend may not have this endpoint yet – fail silently
+      console.warn('Could not load transactions')
+    }
+  }, [API_URL, getAccessToken])
+
   useEffect(() => {
-    if (session) fetchChemicals()
-  }, [session, fetchChemicals])
+    if (session) {
+      fetchChemicals()
+      fetchTransactions()
+    }
+  }, [session, fetchChemicals, fetchTransactions])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -323,7 +518,6 @@ function App() {
     fd.append('file', file)
 
     try {
-      // Simulate progress for UX (real progress would need XHR)
       const progressInterval = setInterval(() => {
         setUploadProgress((p) => {
           const current = p[id] || 10
@@ -377,6 +571,127 @@ function App() {
       showMessage('error', 'Download failed')
     }
   }
+
+  /* ─────────────────────────────────────────────────────────
+     Usage / Transaction Log
+  ───────────────────────────────────────────────────────── */
+
+  const openUsageModal = (chem) => {
+    setUsageChem(chem)
+    setUsageForm({ type: 'take', quantity: '', notes: '' })
+    setShowUsageModal(true)
+  }
+
+  const handleLogUsage = async (e) => {
+    e.preventDefault()
+    if (!usageChem) return
+
+    const qty = parseFloat(usageForm.quantity)
+    if (!qty || qty <= 0) {
+      showMessage('error', 'Please enter a valid quantity')
+      return
+    }
+
+    setLoggingUsage(true)
+    const token = await getAccessToken()
+
+    let quantityChange = 0
+    if (usageForm.type === 'take') quantityChange = -qty
+    else if (usageForm.type === 'return') quantityChange = qty
+    else if (usageForm.type === 'adjust') quantityChange = qty - Number(usageChem.quantity)
+
+    const newQuantity = Math.max(0, Number(usageChem.quantity) + quantityChange)
+
+    try {
+      // 1. Update chemical quantity
+      const updateRes = await fetch(`${API_URL}/chemicals/${usageChem.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          ...usageChem,
+          quantity: newQuantity,
+        }),
+      })
+      if (!updateRes.ok) throw new Error('Failed to update quantity')
+
+      // 2. Create transaction record
+      const txPayload = {
+        chemical_id: usageChem.id,
+        chemical_name: usageChem.name,
+        type: usageForm.type,
+        quantity_change: quantityChange,
+        quantity_before: Number(usageChem.quantity),
+        quantity_after: newQuantity,
+        unit: usageChem.unit,
+        notes: usageForm.notes.trim() || null,
+        user_email: session.user.email,
+      }
+
+      try {
+        await fetch(`${API_URL}/transactions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(txPayload),
+        })
+      } catch (_) {
+        // If backend doesn't support transactions yet, still continue
+      }
+
+      // Optimistic local update
+      setTransactions((prev) => [
+        {
+          id: `local-${Date.now()}`,
+          ...txPayload,
+          created_at: new Date().toISOString(),
+        },
+        ...prev,
+      ])
+
+      showMessage(
+        'success',
+        usageForm.type === 'take'
+          ? `Took ${qty} ${usageChem.unit} of ${usageChem.name}`
+          : usageForm.type === 'return'
+          ? `Returned ${qty} ${usageChem.unit} of ${usageChem.name}`
+          : `Adjusted ${usageChem.name} to ${newQuantity} ${usageChem.unit}`
+      )
+
+      setShowUsageModal(false)
+      setUsageChem(null)
+      fetchChemicals(true)
+      fetchTransactions()
+    } catch (err) {
+      showMessage('error', 'Failed to log usage')
+    } finally {
+      setLoggingUsage(false)
+    }
+  }
+
+  const filteredTransactions = useMemo(() => {
+    let list = [...transactions]
+
+    if (historyFilter !== 'all') {
+      list = list.filter((t) => t.type === historyFilter)
+    }
+
+    if (historySearch.trim()) {
+      const q = historySearch.toLowerCase()
+      list = list.filter(
+        (t) =>
+          t.chemical_name?.toLowerCase().includes(q) ||
+          t.user_email?.toLowerCase().includes(q) ||
+          t.notes?.toLowerCase().includes(q)
+      )
+    }
+
+    return list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+  }, [transactions, historyFilter, historySearch])
 
   /* ─────────────────────────────────────────────────────────
      Form Helpers
@@ -524,24 +839,23 @@ function App() {
 
   useEffect(() => {
     const handler = (e) => {
-      // Cmd/Ctrl + K → command palette
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault()
         setCommandOpen((v) => !v)
       }
-      // Cmd/Ctrl + N → new chemical
       if ((e.metaKey || e.ctrlKey) && e.key === 'n' && session) {
         e.preventDefault()
         resetForm()
         setShowForm(true)
       }
-      // Escape
       if (e.key === 'Escape') {
         setCommandOpen(false)
         setHazardLegendOpen(false)
+        setNotifOpen(false)
+        setShowUsageModal(false)
+        setShowHistory(false)
         if (showForm) resetForm()
       }
-      // / → focus search
       if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) {
         e.preventDefault()
         searchRef.current?.focus()
@@ -578,9 +892,7 @@ function App() {
       {/* Toast */}
       {message && (
         <div className={`toast toast-${message.type}`} key={message.id}>
-          <span className="toast-icon">
-            {message.type === 'success' ? '✓' : '✕'}
-          </span>
+          <span className="toast-icon">{message.type === 'success' ? '✓' : '✕'}</span>
           <span>{message.text}</span>
         </div>
       )}
@@ -596,6 +908,82 @@ function App() {
         </div>
 
         <div className="header-actions">
+          {/* Notification Bell */}
+          <div className="notif-wrapper" ref={notifRef}>
+            <button
+              className="icon-btn notif-btn"
+              onClick={() => setNotifOpen((v) => !v)}
+              title="Notifications"
+            >
+              🔔
+              {unreadCount > 0 && <span className="notif-badge">{unreadCount}</span>}
+            </button>
+
+            {notifOpen && (
+              <div className="notif-dropdown">
+                <div className="notif-header">
+                  <strong>Notifications</strong>
+                  <div className="notif-actions">
+                    <button onClick={markAllRead}>Mark all read</button>
+                    <button onClick={clearNotifications}>Clear</button>
+                  </div>
+                </div>
+
+                <div className="notif-list">
+                  {notifications.length === 0 ? (
+                    <div className="notif-empty">No notifications</div>
+                  ) : (
+                    notifications.map((n) => (
+                      <div
+                        key={n.id}
+                        className={`notif-item ${n.read ? 'read' : ''} type-${n.type}`}
+                        onClick={() => markAsRead(n.id)}
+                      >
+                        <div className="notif-title">
+                          {n.type === 'low' && '📉 '}
+                          {n.type === 'soon' && '⏳ '}
+                          {n.type === 'expired' && '🚫 '}
+                          {n.title}
+                        </div>
+                        <div className="notif-message">{n.message}</div>
+                        <div className="notif-time">
+                          {new Date(n.createdAt).toLocaleString()}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="notif-footer">
+                  <label className="notif-toggle">
+                    <input
+                      type="checkbox"
+                      checked={notificationsEnabled}
+                      onChange={toggleNotifications}
+                    />
+                    Enable notifications
+                  </label>
+                  {notifPermission !== 'granted' && (
+                    <button
+                      className="btn btn-sm btn-primary"
+                      onClick={requestNotificationPermission}
+                    >
+                      Allow browser notifications
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <button
+            className="icon-btn"
+            onClick={() => setShowHistory(true)}
+            title="Usage History"
+          >
+            📋
+          </button>
+
           <button
             className="icon-btn"
             onClick={() => setCommandOpen(true)}
@@ -742,7 +1130,7 @@ function App() {
         </div>
       )}
 
-      {/* Form Modal / Panel */}
+      {/* Form Modal */}
       {showForm && (
         <div className="form-overlay" onClick={(e) => e.target === e.currentTarget && resetForm()}>
           <div className="form-panel" ref={formRef}>
@@ -839,7 +1227,9 @@ function App() {
                     value={formData.min_stock}
                     onChange={handleChange}
                   />
-                  {formErrors.min_stock && <span className="error-text">{formErrors.min_stock}</span>}
+                  {formErrors.min_stock && (
+                    <span className="error-text">{formErrors.min_stock}</span>
+                  )}
                 </div>
 
                 <div className="form-group full">
@@ -890,6 +1280,156 @@ function App() {
         </div>
       )}
 
+      {/* Usage Modal */}
+      {showUsageModal && usageChem && (
+        <div
+          className="form-overlay"
+          onClick={(e) => e.target === e.currentTarget && setShowUsageModal(false)}
+        >
+          <div className="form-panel" style={{ maxWidth: 480 }}>
+            <div className="form-header">
+              <h2>Log Usage</h2>
+              <button className="icon-btn" onClick={() => setShowUsageModal(false)}>
+                ✕
+              </button>
+            </div>
+
+            <div style={{ marginBottom: 20, padding: '12px 16px', background: 'var(--bg)', borderRadius: 10 }}>
+              <strong>{usageChem.name}</strong>
+              <div style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginTop: 4 }}>
+                Current stock: {usageChem.quantity} {usageChem.unit}
+              </div>
+            </div>
+
+            <form onSubmit={handleLogUsage}>
+              <div className="form-group" style={{ marginBottom: 16 }}>
+                <label>Action</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {['take', 'return', 'adjust'].map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      className={`btn ${usageForm.type === t ? 'btn-primary' : 'btn-ghost'}`}
+                      onClick={() => setUsageForm((f) => ({ ...f, type: t }))}
+                      style={{ flex: 1, textTransform: 'capitalize' }}
+                    >
+                      {t === 'take' ? '➖ Take' : t === 'return' ? '➕ Return' : '✏️ Adjust'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 16 }}>
+                <label>
+                  {usageForm.type === 'adjust' ? 'New Quantity' : 'Quantity'} ({usageChem.unit})
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  min="0"
+                  value={usageForm.quantity}
+                  onChange={(e) => setUsageForm((f) => ({ ...f, quantity: e.target.value }))}
+                  placeholder={usageForm.type === 'adjust' ? 'Enter new total' : 'Amount'}
+                  required
+                  autoFocus
+                />
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 24 }}>
+                <label>Notes (optional)</label>
+                <input
+                  value={usageForm.notes}
+                  onChange={(e) => setUsageForm((f) => ({ ...f, notes: e.target.value }))}
+                  placeholder="e.g. Used for experiment X"
+                />
+              </div>
+
+              <div className="form-actions">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setShowUsageModal(false)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="btn btn-primary" disabled={loggingUsage}>
+                  {loggingUsage ? 'Saving…' : 'Log Usage'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Transaction History Drawer */}
+      {showHistory && (
+        <div className="form-overlay" onClick={(e) => e.target === e.currentTarget && setShowHistory(false)}>
+          <div className="history-panel">
+            <div className="form-header">
+              <h2>Usage History</h2>
+              <button className="icon-btn" onClick={() => setShowHistory(false)}>
+                ✕
+              </button>
+            </div>
+
+            <div className="history-filters">
+              <input
+                className="search-input"
+                placeholder="Search chemical, user, notes…"
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+              />
+              <div className="filter-pills">
+                {['all', 'take', 'return', 'adjust'].map((f) => (
+                  <button
+                    key={f}
+                    className={`pill ${historyFilter === f ? 'active' : ''}`}
+                    onClick={() => setHistoryFilter(f)}
+                  >
+                    {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="history-list">
+              {filteredTransactions.length === 0 ? (
+                <div className="empty-state" style={{ padding: '40px 20px' }}>
+                  <p>No transactions found</p>
+                </div>
+              ) : (
+                filteredTransactions.map((t) => (
+                  <div key={t.id} className={`history-item type-${t.type}`}>
+                    <div className="history-main">
+                      <div className="history-title">
+                        <span className={`history-type type-${t.type}`}>
+                          {t.type === 'take' ? '➖ Take' : t.type === 'return' ? '➕ Return' : '✏️ Adjust'}
+                        </span>
+                        <strong>{t.chemical_name}</strong>
+                      </div>
+                      <div className="history-meta">
+                        <span>
+                          {t.quantity_change > 0 ? '+' : ''}
+                          {t.quantity_change} {t.unit}
+                        </span>
+                        <span>
+                          {t.quantity_before} → {t.quantity_after} {t.unit}
+                        </span>
+                      </div>
+                      {t.notes && <div className="history-notes">{t.notes}</div>}
+                    </div>
+                    <div className="history-side">
+                      <div className="history-user">{t.user_email}</div>
+                      <div className="history-time">{formatDateTime(t.created_at)}</div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Content */}
       <main className="content">
         {loading ? (
@@ -920,7 +1460,6 @@ function App() {
             )}
           </div>
         ) : viewMode === 'cards' ? (
-          /* ── Card View ── */
           <div className="cards-grid">
             {filtered.map((chem) => {
               const expired = isExpired(chem)
@@ -1059,6 +1598,9 @@ function App() {
                   </div>
 
                   <div className="card-actions">
+                    <button className="btn btn-sm btn-ghost" onClick={() => openUsageModal(chem)}>
+                      Log Usage
+                    </button>
                     <button className="btn btn-sm btn-ghost" onClick={() => handleEdit(chem)}>
                       Edit
                     </button>
@@ -1074,7 +1616,6 @@ function App() {
             })}
           </div>
         ) : (
-          /* ── Table View ── */
           <div className="table-wrapper">
             <table className="chem-table">
               <thead>
@@ -1207,6 +1748,9 @@ function App() {
                         )}
                       </td>
                       <td className="actions">
+                        <button className="btn-sm" onClick={() => openUsageModal(chem)}>
+                          Log
+                        </button>
                         <button className="btn-sm" onClick={() => handleEdit(chem)}>
                           Edit
                         </button>
@@ -1246,6 +1790,14 @@ function App() {
                 }}
               >
                 <span>➕</span> Add new chemical
+              </button>
+              <button
+                onClick={() => {
+                  setShowHistory(true)
+                  setCommandOpen(false)
+                }}
+              >
+                <span>📋</span> Usage History
               </button>
               <button
                 onClick={() => {
