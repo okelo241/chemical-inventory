@@ -1,14 +1,14 @@
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 import os
+from jose import jwt, JWTError
 from supabase import create_client, Client
 
 from . import models, schemas
 from .database import engine, get_db
 
-# Create tables (only needed the first time)
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Chemical Inventory API")
@@ -21,13 +21,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ========== Supabase Configuration ==========
+# Supabase
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://qgdtkwhgszvcywsnuyff.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")  # We will set this on Render
-
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 BUCKET_NAME = "sds-files"
-# ============================================
+
+# Supabase JWT secret (found in Project Settings → API → JWT Secret)
+JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
+
+
+def get_current_user_id(authorization: Optional[str] = Header(None)) -> str:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
+
+    token = authorization.split(" ")[1]
+
+    try:
+        payload = jwt.decode(
+            token,
+            JWT_SECRET,
+            algorithms=["HS256"],
+            audience="authenticated"
+        )
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return user_id
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
 
 @app.get("/")
@@ -36,21 +58,35 @@ def read_root():
 
 
 @app.get("/chemicals", response_model=List[schemas.Chemical])
-def get_chemicals(db: Session = Depends(get_db)):
-    return db.query(models.Chemical).all()
+def get_chemicals(
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id)
+):
+    return db.query(models.Chemical).filter(models.Chemical.user_id == user_id).all()
 
 
 @app.get("/chemicals/{chemical_id}", response_model=schemas.Chemical)
-def get_chemical(chemical_id: int, db: Session = Depends(get_db)):
-    chemical = db.query(models.Chemical).filter(models.Chemical.id == chemical_id).first()
+def get_chemical(
+    chemical_id: int,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id)
+):
+    chemical = db.query(models.Chemical).filter(
+        models.Chemical.id == chemical_id,
+        models.Chemical.user_id == user_id
+    ).first()
     if not chemical:
         raise HTTPException(status_code=404, detail="Chemical not found")
     return chemical
 
 
 @app.post("/chemicals", response_model=schemas.Chemical)
-def create_chemical(chemical: schemas.ChemicalCreate, db: Session = Depends(get_db)):
-    db_chemical = models.Chemical(**chemical.dict())
+def create_chemical(
+    chemical: schemas.ChemicalCreate,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id)
+):
+    db_chemical = models.Chemical(**chemical.dict(), user_id=user_id)
     db.add(db_chemical)
     db.commit()
     db.refresh(db_chemical)
@@ -58,8 +94,16 @@ def create_chemical(chemical: schemas.ChemicalCreate, db: Session = Depends(get_
 
 
 @app.put("/chemicals/{chemical_id}", response_model=schemas.Chemical)
-def update_chemical(chemical_id: int, chemical: schemas.ChemicalUpdate, db: Session = Depends(get_db)):
-    db_chemical = db.query(models.Chemical).filter(models.Chemical.id == chemical_id).first()
+def update_chemical(
+    chemical_id: int,
+    chemical: schemas.ChemicalUpdate,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id)
+):
+    db_chemical = db.query(models.Chemical).filter(
+        models.Chemical.id == chemical_id,
+        models.Chemical.user_id == user_id
+    ).first()
     if not db_chemical:
         raise HTTPException(status_code=404, detail="Chemical not found")
 
@@ -73,12 +117,18 @@ def update_chemical(chemical_id: int, chemical: schemas.ChemicalUpdate, db: Sess
 
 
 @app.delete("/chemicals/{chemical_id}")
-def delete_chemical(chemical_id: int, db: Session = Depends(get_db)):
-    db_chemical = db.query(models.Chemical).filter(models.Chemical.id == chemical_id).first()
+def delete_chemical(
+    chemical_id: int,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id)
+):
+    db_chemical = db.query(models.Chemical).filter(
+        models.Chemical.id == chemical_id,
+        models.Chemical.user_id == user_id
+    ).first()
     if not db_chemical:
         raise HTTPException(status_code=404, detail="Chemical not found")
 
-    # Optional: also delete the SDS file from storage
     if db_chemical.sds_filename:
         try:
             supabase.storage.from_(BUCKET_NAME).remove([db_chemical.sds_filename])
@@ -91,18 +141,22 @@ def delete_chemical(chemical_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/chemicals/{chemical_id}/upload-sds")
-def upload_sds(chemical_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
-    db_chemical = db.query(models.Chemical).filter(models.Chemical.id == chemical_id).first()
+def upload_sds(
+    chemical_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id)
+):
+    db_chemical = db.query(models.Chemical).filter(
+        models.Chemical.id == chemical_id,
+        models.Chemical.user_id == user_id
+    ).first()
     if not db_chemical:
         raise HTTPException(status_code=404, detail="Chemical not found")
 
-    # Create a unique filename
-    file_path = f"{chemical_id}/{file.filename}"
-
-    # Read file content
+    file_path = f"{user_id}/{chemical_id}/{file.filename}"
     file_content = file.file.read()
 
-    # Upload to Supabase Storage
     try:
         supabase.storage.from_(BUCKET_NAME).upload(
             path=file_path,
@@ -112,7 +166,6 @@ def upload_sds(chemical_id: int, file: UploadFile = File(...), db: Session = Dep
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
-    # Save the path in the database
     db_chemical.sds_filename = file_path
     db.commit()
     db.refresh(db_chemical)
@@ -121,11 +174,17 @@ def upload_sds(chemical_id: int, file: UploadFile = File(...), db: Session = Dep
 
 
 @app.get("/chemicals/{chemical_id}/sds")
-def get_sds_url(chemical_id: int, db: Session = Depends(get_db)):
-    chemical = db.query(models.Chemical).filter(models.Chemical.id == chemical_id).first()
+def get_sds_url(
+    chemical_id: int,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id)
+):
+    chemical = db.query(models.Chemical).filter(
+        models.Chemical.id == chemical_id,
+        models.Chemical.user_id == user_id
+    ).first()
     if not chemical or not chemical.sds_filename:
         raise HTTPException(status_code=404, detail="SDS file not found")
 
-    # Generate a public URL
     public_url = supabase.storage.from_(BUCKET_NAME).get_public_url(chemical.sds_filename)
     return {"url": public_url}
