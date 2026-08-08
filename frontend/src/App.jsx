@@ -1,14 +1,19 @@
 import { useState, useEffect } from 'react'
+import { supabase } from './supabase'
+import Login from './Login'
 import './App.css'
 
 function App() {
+  const [session, setSession] = useState(null)
+  const [loadingAuth, setLoadingAuth] = useState(true)
+
   const [chemicals, setChemicals] = useState([])
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
   const [sortBy, setSortBy] = useState('name')
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState(null)
 
   const [formData, setFormData] = useState({
@@ -24,15 +29,49 @@ function App() {
 
   const API_URL = import.meta.env.VITE_API_URL
 
+  // ========== Auth ==========
+  useEffect(() => {
+    // Get current session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      setLoadingAuth(false)
+    })
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut()
+    setSession(null)
+    setChemicals([])
+  }
+
+  // ========== Helpers ==========
   const showMessage = (type, text) => {
     setMessage({ type, text })
     setTimeout(() => setMessage(null), 3500)
   }
 
+  const getAccessToken = async () => {
+    const { data: { session } } = await supabase.auth.getSession()
+    return session?.access_token
+  }
+
+  // ========== API Calls ==========
   const fetchChemicals = async () => {
     try {
       setLoading(true)
-      const res = await fetch(`${API_URL}/chemicals`)
+      const token = await getAccessToken()
+      const res = await fetch(`${API_URL}/chemicals`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      })
       if (!res.ok) throw new Error('Failed to load chemicals')
       const data = await res.json()
       setChemicals(data)
@@ -45,8 +84,10 @@ function App() {
   }
 
   useEffect(() => {
-    fetchChemicals()
-  }, [])
+    if (session) {
+      fetchChemicals()
+    }
+  }, [session])
 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value })
@@ -69,6 +110,7 @@ function App() {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    const token = await getAccessToken()
 
     const payload = {
       name: formData.name,
@@ -85,7 +127,10 @@ function App() {
       if (editingId) {
         const res = await fetch(`${API_URL}/chemicals/${editingId}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
           body: JSON.stringify(payload)
         })
         if (!res.ok) throw new Error()
@@ -93,7 +138,10 @@ function App() {
       } else {
         const res = await fetch(`${API_URL}/chemicals`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
           body: JSON.stringify(payload)
         })
         if (!res.ok) throw new Error()
@@ -123,10 +171,12 @@ function App() {
 
   const handleDelete = async (id, name) => {
     if (!window.confirm(`Are you sure you want to delete "${name}"?`)) return
+    const token = await getAccessToken()
 
     try {
       const res = await fetch(`${API_URL}/chemicals/${id}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
       })
       if (!res.ok) throw new Error()
       showMessage('success', `"${name}" deleted`)
@@ -137,12 +187,14 @@ function App() {
   }
 
   const handleSdsUpload = async (id, file) => {
+    const token = await getAccessToken()
     const formDataUpload = new FormData()
     formDataUpload.append('file', file)
 
     try {
       const res = await fetch(`${API_URL}/chemicals/${id}/upload-sds`, {
         method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
         body: formDataUpload
       })
       if (!res.ok) throw new Error()
@@ -154,8 +206,11 @@ function App() {
   }
 
   const handleDownloadSds = async (id) => {
+    const token = await getAccessToken()
     try {
-      const res = await fetch(`${API_URL}/chemicals/${id}/sds`)
+      const res = await fetch(`${API_URL}/chemicals/${id}/sds`, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
       const data = await res.json()
       if (data.url) {
         window.open(data.url, '_blank')
@@ -167,6 +222,7 @@ function App() {
     }
   }
 
+  // ========== Filtering & Sorting ==========
   const isExpired = (chem) => chem.expiry_date && new Date(chem.expiry_date) < new Date()
   const isLow = (chem) => chem.quantity <= chem.min_stock
   const isExpiringSoon = (chem) => {
@@ -199,6 +255,20 @@ function App() {
     return 0
   })
 
+  // ========== Render ==========
+  if (loadingAuth) {
+    return (
+      <div className="loading" style={{ minHeight: '100vh' }}>
+        <div className="spinner"></div>
+        <p>Loading...</p>
+      </div>
+    )
+  }
+
+  if (!session) {
+    return <Login onLogin={(session) => setSession(session)} />
+  }
+
   return (
     <div className="app">
       {message && (
@@ -212,15 +282,23 @@ function App() {
           <h1>Chemical Inventory</h1>
           <p>Track chemicals • Stock levels • SDS files</p>
         </div>
-        <button
-          className="btn btn-primary"
-          onClick={() => {
-            resetForm()
-            setShowForm(true)
-          }}
-        >
-          + Add Chemical
-        </button>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <span style={{ fontSize: '0.9rem', color: '#64748b' }}>
+            {session.user.email}
+          </span>
+          <button className="btn btn-secondary" onClick={handleLogout}>
+            Logout
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              resetForm()
+              setShowForm(true)
+            }}
+          >
+            + Add Chemical
+          </button>
+        </div>
       </header>
 
       <div className="toolbar">
@@ -374,7 +452,6 @@ function App() {
                         )}
                       </td>
 
-                      {/* SDS Column */}
                       <td className="sds-cell">
                         {chem.sds_filename ? (
                           <div className="sds-info">
@@ -382,10 +459,7 @@ function App() {
                               {chem.sds_filename.split('/').pop()}
                             </div>
                             <div className="sds-actions">
-                              <button
-                                className="sds-link"
-                                onClick={() => handleDownloadSds(chem.id)}
-                              >
+                              <button className="sds-link" onClick={() => handleDownloadSds(chem.id)}>
                                 Download
                               </button>
                               <label className="upload-btn replace-btn">
@@ -421,13 +495,8 @@ function App() {
                       </td>
 
                       <td className="actions">
-                        <button className="btn-sm" onClick={() => handleEdit(chem)}>
-                          Edit
-                        </button>
-                        <button
-                          className="btn-sm btn-danger"
-                          onClick={() => handleDelete(chem.id, chem.name)}
-                        >
+                        <button className="btn-sm" onClick={() => handleEdit(chem)}>Edit</button>
+                        <button className="btn-sm btn-danger" onClick={() => handleDelete(chem.id, chem.name)}>
                           Delete
                         </button>
                       </td>
