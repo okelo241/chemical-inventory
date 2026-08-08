@@ -3,12 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import os
-from jose import jwt, JWTError
 from supabase import create_client, Client
 
 from . import models, schemas
 from .database import engine, get_db
 
+# Create tables
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Chemical Inventory API")
@@ -21,35 +21,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Supabase
+# ========== Supabase Configuration ==========
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://qgdtkwhgszvcywsnuyff.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 BUCKET_NAME = "sds-files"
-
-# Supabase JWT secret (found in Project Settings → API → JWT Secret)
-JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
+# ===========================================
 
 
 def get_current_user_id(authorization: Optional[str] = Header(None)) -> str:
+    """Extract the current user ID from the Supabase access token"""
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid token")
+        raise HTTPException(status_code=401, detail="Missing authorization token")
 
-    token = authorization.split(" ")[1]
+    token = authorization.replace("Bearer ", "")
 
     try:
-        payload = jwt.decode(
-            token,
-            JWT_SECRET,
-            algorithms=["HS256"],
-            audience="authenticated"
-        )
-        user_id = payload.get("sub")
-        if not user_id:
+        user_response = supabase.auth.get_user(token)
+        user = user_response.user
+
+        if not user or not user.id:
             raise HTTPException(status_code=401, detail="Invalid token")
-        return user_id
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+
+        return str(user.id)
+    except Exception as e:
+        print("Auth error:", str(e))
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
 @app.get("/")
@@ -129,10 +126,11 @@ def delete_chemical(
     if not db_chemical:
         raise HTTPException(status_code=404, detail="Chemical not found")
 
+    # Delete SDS file from storage if it exists
     if db_chemical.sds_filename:
         try:
             supabase.storage.from_(BUCKET_NAME).remove([db_chemical.sds_filename])
-        except:
+        except Exception:
             pass
 
     db.delete(db_chemical)
