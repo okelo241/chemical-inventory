@@ -1,4 +1,15 @@
 import './App.css'
+// Import pictograms – adjust paths if your folder structure is different
+import ghs01 from './assets/pictograms/exploding_bomb.gif'
+import ghs02 from './assets/pictograms/flame.gif'
+import ghs03 from './assets/pictograms/flame_over_circle.gif'
+import ghs04 from './assets/pictograms/gas_cylinder.gif'
+import ghs05 from './assets/pictograms/corrosion.gif'
+import ghs06 from './assets/pictograms/skull_and_crossbones.gif'
+import ghs07 from './assets/pictograms/exclamation_mark.gif'
+import ghs08 from './assets/pictograms/health_hazard.gif'
+import ghs09 from './assets/pictograms/GHS-pictogram-pollu.svg.webp'
+import biohazard from './assets/pictograms/biohazardous_infectious_materials.gif'
 
 function Landing({ onGetStarted }) {
   return (
@@ -39,7 +50,10 @@ function Landing({ onGetStarted }) {
             <button className="btn btn-primary btn-xl" onClick={onGetStarted}>
               Start Free Account →
             </button>
-            <button className="btn btn-outline btn-xl" onClick={() => document.getElementById('storage-guide')?.scrollIntoView({ behavior: 'smooth' })}>
+            <button
+              className="btn btn-outline btn-xl"
+              onClick={() => document.getElementById('storage-guide')?.scrollIntoView({ behavior: 'smooth' })}
+            >
               Explore Storage Rules
             </button>
           </div>
@@ -151,7 +165,6 @@ function Landing({ onGetStarted }) {
             </p>
           </div>
 
-          {/* Core Principles */}
           <div className="guide-block">
             <h3>Fundamental rules</h3>
             <div className="principle-grid">
@@ -182,12 +195,10 @@ function Landing({ onGetStarted }) {
             </div>
           </div>
 
-          {/* Common Storage Groups */}
           <div className="guide-block">
             <h3>Common laboratory storage groups</h3>
             <p className="block-intro">
-              Many institutions use a set of compatible storage groups (sometimes labeled A–X or 1–9). 
-              Below is a practical synthesis of the most widely used schemes.
+              Many institutions use a set of compatible storage groups. Below is a practical synthesis of the most widely used schemes.
             </p>
 
             <div className="storage-groups">
@@ -275,7 +286,6 @@ function Landing({ onGetStarted }) {
             </div>
           </div>
 
-          {/* Never Store Together */}
           <div className="guide-block incompatible-block">
             <h3>Never store these combinations together</h3>
             <p className="block-intro">These pairings are responsible for a large fraction of laboratory chemical incidents.</p>
@@ -338,7 +348,6 @@ function Landing({ onGetStarted }) {
             </div>
           </div>
 
-          {/* Practical tips */}
           <div className="guide-block tips-block">
             <h3>Practical laboratory tips</h3>
             <ul className="tips-list">
@@ -354,60 +363,240 @@ function Landing({ onGetStarted }) {
         </div>
       </section>
 
-      {/* ===================== GHS SECTION ===================== */}
+      {/* ===================== GHS + BIOHAZARD SECTION (EXPANDED) ===================== */}
       <section id="ghs" className="ghs-section">
         <div className="section-inner">
-          <h2>GHS Hazard Pictograms at a glance</h2>
-          <p className="section-lead">
-            The Globally Harmonized System uses nine standard pictograms. 
-            A single chemical may carry several. Your inventory should make these visible.
-          </p>
+          <div className="section-header">
+            <h2>GHS Hazard Pictograms & Biohazard</h2>
+            <p className="section-lead">
+              The Globally Harmonized System (GHS) uses nine standardized pictograms to communicate chemical hazards worldwide.
+              A single substance may carry multiple pictograms. Your inventory should make these symbols immediately visible.
+              We also include the widely recognized biohazard symbol used for biological risks in laboratories.
+            </p>
+          </div>
 
-          <div className="ghs-grid">
-            <div className="ghs-card">
-              <div className="ghs-symbol">💥</div>
+          <div className="ghs-intro-block">
+            <h3>Why pictograms matter in chemical inventory</h3>
+            <p>
+              GHS pictograms appear on manufacturer labels and Safety Data Sheets. When you record a chemical in your inventory,
+              associating the correct pictograms helps everyone in the lab instantly recognize the primary hazards —
+              whether they are looking at a screen, a printed list, or a secondary container label you generate.
+              This supports both daily safety and formal compliance with Hazard Communication requirements.
+            </p>
+          </div>
+
+          {/* Official GHS Pictograms Grid */}
+          <div className="ghs-grid-large">
+            {/* GHS01 */}
+            <div className="ghs-card-large">
+              <div className="ghs-img-wrap">
+                <img src={ghs01} alt="GHS01 Exploding Bomb – Explosive" className="ghs-pictogram-img" />
+              </div>
+              <div className="ghs-code">GHS01</div>
               <h4>Exploding Bomb</h4>
-              <p>Explosives, self-reactives, organic peroxides</p>
+              <p className="ghs-title">Explosive / Self-Reactive / Organic Peroxide</p>
+              <ul className="ghs-details">
+                <li>Unstable explosives</li>
+                <li>Explosives (Divisions 1.1, 1.2, 1.3, 1.4)</li>
+                <li>Self-reactive substances and mixtures (Types A, B)</li>
+                <li>Organic peroxides (Types A, B)</li>
+              </ul>
+              <p className="ghs-note">Store away from heat, shock, friction and all other chemicals. Specialized magazines or cabinets required.</p>
             </div>
-            <div className="ghs-card">
-              <div className="ghs-symbol">🔥</div>
+
+            {/* GHS02 */}
+            <div className="ghs-card-large">
+              <div className="ghs-img-wrap">
+                <img src={ghs02} alt="GHS02 Flame – Flammable" className="ghs-pictogram-img" />
+              </div>
+              <div className="ghs-code">GHS02</div>
               <h4>Flame</h4>
-              <p>Flammables, pyrophorics, self-heating, emits flammable gas</p>
+              <p className="ghs-title">Flammable / Pyrophoric / Self-Heating / Emits Flammable Gas</p>
+              <ul className="ghs-details">
+                <li>Flammable gases, aerosols, liquids, solids</li>
+                <li>Pyrophoric liquids and solids</li>
+                <li>Self-heating substances</li>
+                <li>Substances which in contact with water emit flammable gases</li>
+                <li>Self-reactive substances and organic peroxides (less severe types)</li>
+              </ul>
+              <p className="ghs-note">Store in approved flammable cabinets. Keep away from oxidizers and ignition sources.</p>
             </div>
-            <div className="ghs-card">
-              <div className="ghs-symbol">⭕🔥</div>
+
+            {/* GHS03 */}
+            <div className="ghs-card-large">
+              <div className="ghs-img-wrap">
+                <img src={ghs03} alt="GHS03 Flame over Circle – Oxidizer" className="ghs-pictogram-img" />
+              </div>
+              <div className="ghs-code">GHS03</div>
               <h4>Flame over Circle</h4>
-              <p>Oxidizers</p>
+              <p className="ghs-title">Oxidizing</p>
+              <ul className="ghs-details">
+                <li>Oxidizing gases</li>
+                <li>Oxidizing liquids</li>
+                <li>Oxidizing solids</li>
+              </ul>
+              <p className="ghs-note">These materials can cause or intensify fire. Keep completely separated from flammables and combustibles.</p>
             </div>
-            <div className="ghs-card">
-              <div className="ghs-symbol">🧴</div>
+
+            {/* GHS04 */}
+            <div className="ghs-card-large">
+              <div className="ghs-img-wrap">
+                <img src={ghs04} alt="GHS04 Gas Cylinder – Gas under pressure" className="ghs-pictogram-img" />
+              </div>
+              <div className="ghs-code">GHS04</div>
               <h4>Gas Cylinder</h4>
-              <p>Gases under pressure</p>
+              <p className="ghs-title">Gases under Pressure</p>
+              <ul className="ghs-details">
+                <li>Compressed gases</li>
+                <li>Liquefied gases</li>
+                <li>Refrigerated liquefied gases</li>
+                <li>Dissolved gases</li>
+              </ul>
+              <p className="ghs-note">Secure cylinders upright. Protect from heat. Separate fuel gases from oxidizing gases.</p>
             </div>
-            <div className="ghs-card">
-              <div className="ghs-symbol">🧴🖐️</div>
+
+            {/* GHS05 */}
+            <div className="ghs-card-large">
+              <div className="ghs-img-wrap">
+                <img src={ghs05} alt="GHS05 Corrosion" className="ghs-pictogram-img" />
+              </div>
+              <div className="ghs-code">GHS05</div>
               <h4>Corrosion</h4>
-              <p>Skin corrosion, serious eye damage, corrosive to metals</p>
+              <p className="ghs-title">Skin Corrosion / Eye Damage / Corrosive to Metals</p>
+              <ul className="ghs-details">
+                <li>Skin corrosion / burns</li>
+                <li>Serious eye damage</li>
+                <li>Corrosive to metals</li>
+              </ul>
+              <p className="ghs-note">Use secondary containment. Separate acids from bases. Prefer non-metal shelving for strong acids.</p>
             </div>
-            <div className="ghs-card">
-              <div className="ghs-symbol">☠️</div>
-              <h4>Skull & Crossbones</h4>
-              <p>Acute toxicity (fatal or toxic)</p>
+
+            {/* GHS06 */}
+            <div className="ghs-card-large">
+              <div className="ghs-img-wrap">
+                <img src={ghs06} alt="GHS06 Skull and Crossbones – Toxic" className="ghs-pictogram-img" />
+              </div>
+              <div className="ghs-code">GHS06</div>
+              <h4>Skull and Crossbones</h4>
+              <p className="ghs-title">Acute Toxicity (Fatal or Toxic)</p>
+              <ul className="ghs-details">
+                <li>Acute toxicity – Oral (Categories 1, 2, 3)</li>
+                <li>Acute toxicity – Dermal (Categories 1, 2, 3)</li>
+                <li>Acute toxicity – Inhalation (Categories 1, 2, 3)</li>
+              </ul>
+              <p className="ghs-note">Highly toxic materials. Restrict access. Never store cyanides or sulfides near acids.</p>
             </div>
-            <div className="ghs-card">
-              <div className="ghs-symbol">❗</div>
+
+            {/* GHS07 */}
+            <div className="ghs-card-large">
+              <div className="ghs-img-wrap">
+                <img src={ghs07} alt="GHS07 Exclamation Mark – Harmful / Irritant" className="ghs-pictogram-img" />
+              </div>
+              <div className="ghs-code">GHS07</div>
               <h4>Exclamation Mark</h4>
-              <p>Irritant, skin sensitizer, acute toxicity (harmful), narcotic effects</p>
+              <p className="ghs-title">Harmful / Irritant / Sensitizer</p>
+              <ul className="ghs-details">
+                <li>Acute toxicity (Category 4)</li>
+                <li>Skin irritation / eye irritation</li>
+                <li>Skin sensitization</li>
+                <li>Specific target organ toxicity – single exposure (Category 3)</li>
+                <li>Respiratory tract irritation, narcotic effects</li>
+              </ul>
+              <p className="ghs-note">Common on many laboratory reagents. Still requires proper PPE and good ventilation.</p>
             </div>
-            <div className="ghs-card">
-              <div className="ghs-symbol">🫁</div>
+
+            {/* GHS08 */}
+            <div className="ghs-card-large">
+              <div className="ghs-img-wrap">
+                <img src={ghs08} alt="GHS08 Health Hazard" className="ghs-pictogram-img" />
+              </div>
+              <div className="ghs-code">GHS08</div>
               <h4>Health Hazard</h4>
-              <p>Carcinogen, mutagen, reproductive toxicity, STOT, aspiration hazard</p>
+              <p className="ghs-title">Carcinogen / Mutagen / Reproductive Toxicity / STOT / Aspiration</p>
+              <ul className="ghs-details">
+                <li>Respiratory sensitization</li>
+                <li>Germ cell mutagenicity</li>
+                <li>Carcinogenicity</li>
+                <li>Reproductive toxicity</li>
+                <li>Specific target organ toxicity (single or repeated exposure)</li>
+                <li>Aspiration hazard</li>
+              </ul>
+              <p className="ghs-note">Long-term or serious health effects. Minimize exposure and track usage carefully.</p>
             </div>
-            <div className="ghs-card">
-              <div className="ghs-symbol">🌳🐟</div>
+
+            {/* GHS09 */}
+            <div className="ghs-card-large">
+              <div className="ghs-img-wrap">
+                <img src={ghs09} alt="GHS09 Environment – Aquatic Toxicity" className="ghs-pictogram-img" />
+              </div>
+              <div className="ghs-code">GHS09</div>
               <h4>Environment</h4>
-              <p>Aquatic toxicity (mandatory in many jurisdictions)</p>
+              <p className="ghs-title">Hazardous to the Aquatic Environment</p>
+              <ul className="ghs-details">
+                <li>Acute aquatic toxicity</li>
+                <li>Chronic aquatic toxicity</li>
+              </ul>
+              <p className="ghs-note">Prevent release to drains and the environment. Follow local waste disposal rules strictly.</p>
+            </div>
+
+            {/* BIOHAZARD */}
+            <div className="ghs-card-large biohazard-card">
+              <div className="ghs-img-wrap">
+                <img src={biohazard} alt="Biohazard symbol" className="ghs-pictogram-img" />
+              </div>
+              <div className="ghs-code">BIOHAZARD</div>
+              <h4>Biohazard</h4>
+              <p className="ghs-title">Biological Hazard</p>
+              <ul className="ghs-details">
+                <li>Infectious agents</li>
+                <li>Blood and body fluids</li>
+                <li>Pathogenic microorganisms</li>
+                <li>Genetically modified organisms (where applicable)</li>
+                <li>Clinical and diagnostic specimens</li>
+              </ul>
+              <p className="ghs-note">
+                Not part of the official GHS chemical system, but essential in any laboratory that handles biological materials.
+                Use alongside chemical pictograms when both chemical and biological risks are present.
+              </p>
+            </div>
+          </div>
+
+          {/* Additional GHS Information */}
+          <div className="ghs-extra-info">
+            <div className="ghs-info-card">
+              <h3>How GHS works with your inventory</h3>
+              <p>
+                When you add a chemical, you can record the GHS pictograms that appear on its original label or SDS.
+                This information then travels with the chemical record — appearing in search results, location lists,
+                printed labels, and emergency reports. It turns a simple name-and-quantity list into a true safety tool.
+              </p>
+            </div>
+
+            <div className="ghs-info-card">
+              <h3>Multiple pictograms on one chemical</h3>
+              <p>
+                Many laboratory reagents carry more than one pictogram. For example, methanol typically shows
+                Flame + Skull and Crossbones + Health Hazard. Your system should allow multiple selections
+                so the full hazard profile is visible at a glance.
+              </p>
+            </div>
+
+            <div className="ghs-info-card">
+              <h3>Pictograms vs. storage groups</h3>
+              <p>
+                GHS pictograms communicate hazard type. Storage groups (flammables, oxidizers, acids, bases, etc.)
+                tell you <em>where</em> and <em>with what</em> a chemical may be stored. Both are needed.
+                A chemical can be flammable (GHS02) and still belong in a specific compatible group within the flammable cabinet.
+              </p>
+            </div>
+
+            <div className="ghs-info-card">
+              <h3>Secondary container labeling</h3>
+              <p>
+                When you pour a chemical into a smaller bottle or wash bottle, GHS requires that the secondary container
+                also communicate the hazards. Having the pictograms already recorded in your inventory makes it much easier
+                to generate compliant secondary labels.
+              </p>
             </div>
           </div>
         </div>
@@ -451,7 +640,7 @@ function Landing({ onGetStarted }) {
         <div className="cta-inner">
           <h2>Take control of your chemical inventory</h2>
           <p>
-            Stop relying on spreadsheets and memory. 
+            Stop relying on spreadsheets and memory.
             Start with a system built for the way laboratories actually work.
           </p>
           <button className="btn btn-primary btn-xl" onClick={onGetStarted}>
@@ -476,7 +665,11 @@ function Landing({ onGetStarted }) {
           </div>
         </div>
         <div className="footer-bottom">
-          <p>© 2026 Chemical Inventory. Information on this page is educational and based on common laboratory safety guidance. Always consult current SDS documents and your institutional Chemical Hygiene Plan for specific requirements.</p>
+          <p>
+            © 2026 Chemical Inventory. Information on this page is educational and based on common laboratory safety guidance.
+            Always consult current SDS documents and your institutional Chemical Hygiene Plan for specific requirements.
+            GHS pictograms are standardized under the Globally Harmonized System of Classification and Labelling of Chemicals.
+          </p>
         </div>
       </footer>
     </div>
