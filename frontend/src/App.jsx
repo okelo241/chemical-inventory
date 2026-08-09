@@ -1108,32 +1108,40 @@ function App() {
     }
   }, [session, fetchChemicals, fetchTransactions])
 
-  /* ========================================================================
-     CHEMICAL CRUD
-  ======================================================================== */
+    /* ============================================================================
+     CHEMICAL CRUD OPERATIONS
+  ============================================================================ */
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
+  const handleSubmit = async (event) => {
+    event.preventDefault()
 
     const errors = {}
+
     if (!formData.name || !formData.name.trim()) {
       errors.name = 'Name is required'
     }
+
     if (formData.quantity !== '' && isNaN(Number(formData.quantity))) {
       errors.quantity = 'Quantity must be a valid number'
     }
+
     if (formData.min_stock !== '' && isNaN(Number(formData.min_stock))) {
-      errors.min_stock = 'Min stock must be a valid number'
+      errors.min_stock = 'Minimum stock must be a valid number'
     }
 
     setFormErrors(errors)
-    if (Object.keys(errors).length > 0) return
+
+    if (Object.keys(errors).length > 0) {
+      return
+    }
 
     setSubmitting(true)
 
     try {
       const token = await getAccessToken()
-      if (!token) throw new Error('Not authenticated')
+      if (!token) {
+        throw new Error('Not authenticated')
+      }
 
       const payload = {
         name: formData.name.trim(),
@@ -1148,6 +1156,7 @@ function App() {
         hazard_symbols: formData.hazard_symbols.length > 0 ? formData.hazard_symbols : null,
         batch_lot: formData.batch_lot.trim() || null,
         supplier: formData.supplier.trim() || null,
+        chemical_classes: formData.chemical_classes.length > 0 ? formData.chemical_classes : null,
       }
 
       const url = editingId ? `${API_URL}/chemicals/${editingId}` : `${API_URL}/chemicals`
@@ -1163,14 +1172,14 @@ function App() {
       })
 
       if (!response.ok) {
-        throw new Error('Save failed')
+        throw new Error('Failed to save chemical')
       }
 
       showMessage('success', editingId ? 'Chemical updated successfully' : 'Chemical added successfully')
       resetForm()
       fetchChemicals(true)
-    } catch (err) {
-      console.error(err)
+    } catch (error) {
+      console.error('Save error:', error)
       showMessage('error', 'Something went wrong while saving the chemical')
     } finally {
       setSubmitting(false)
@@ -1190,7 +1199,9 @@ function App() {
         },
       })
 
-      if (!response.ok) throw new Error('Delete failed')
+      if (!response.ok) {
+        throw new Error('Delete failed')
+      }
 
       showMessage('success', `"${name}" has been deleted`)
       setSelectedIds((prev) => {
@@ -1199,7 +1210,7 @@ function App() {
         return next
       })
       fetchChemicals(true)
-    } catch (err) {
+    } catch (error) {
       showMessage('error', 'Failed to delete the chemical')
     }
   }
@@ -1208,7 +1219,7 @@ function App() {
     if (selectedIds.size === 0) return
 
     const confirmed = window.confirm(
-      `You are about to delete ${selectedIds.size} chemical(s). This cannot be undone. Continue?`
+      `You are about to delete ${selectedIds.size} chemical(s). This action cannot be undone. Continue?`
     )
     if (!confirmed) return
 
@@ -1223,7 +1234,7 @@ function App() {
         })
         if (response.ok) successCount++
       } catch (_) {
-        // continue
+        // continue with remaining items
       }
     }
 
@@ -1233,14 +1244,14 @@ function App() {
     fetchChemicals(true)
   }
 
-  /* ========================================================================
-     SDS HANDLING
-  ======================================================================== */
+  /* ============================================================================
+     SDS FILE HANDLING
+  ============================================================================ */
 
   const handleSdsUpload = async (id, file) => {
     if (!file) return
     if (file.type !== 'application/pdf') {
-      showMessage('error', 'Only PDF files are accepted for SDS')
+      showMessage('error', 'Only PDF files are accepted for SDS documents')
       return
     }
 
@@ -1273,7 +1284,9 @@ function App() {
       clearInterval(progressInterval)
       setUploadProgress((prev) => ({ ...prev, [id]: 100 }))
 
-      if (!response.ok) throw new Error('Upload failed')
+      if (!response.ok) {
+        throw new Error('Upload failed')
+      }
 
       showMessage('success', 'SDS file uploaded successfully')
 
@@ -1286,7 +1299,7 @@ function App() {
       }, 700)
 
       fetchChemicals(true)
-    } catch (err) {
+    } catch (error) {
       setUploadProgress((prev) => {
         const next = { ...prev }
         delete next[id]
@@ -1311,14 +1324,14 @@ function App() {
       } else {
         showMessage('error', 'SDS file not found')
       }
-    } catch (err) {
+    } catch (error) {
       showMessage('error', 'Could not download SDS file')
     }
   }
 
-  /* ========================================================================
+  /* ============================================================================
      USAGE / TRANSACTION LOG
-  ======================================================================== */
+  ============================================================================ */
 
   const openUsageModal = (chemical) => {
     setUsageChem(chemical)
@@ -1330,8 +1343,8 @@ function App() {
     setShowUsageModal(true)
   }
 
-  const handleLogUsage = async (e) => {
-    e.preventDefault()
+  const handleLogUsage = async (event) => {
+    event.preventDefault()
     if (!usageChem) return
 
     const qty = parseFloat(usageForm.quantity)
@@ -1356,7 +1369,7 @@ function App() {
 
       const newQuantity = Math.max(0, Number(usageChem.quantity) + quantityChange)
 
-      // Update the chemical quantity first
+      // Update chemical quantity
       const updateResponse = await fetch(`${API_URL}/chemicals/${usageChem.id}`, {
         method: 'PUT',
         headers: {
@@ -1409,29 +1422,29 @@ function App() {
         ...prev,
       ])
 
-      const successMsg =
+      const successMessage =
         usageForm.type === 'take'
           ? `Took ${qty} ${usageChem.unit} of ${usageChem.name}`
           : usageForm.type === 'return'
           ? `Returned ${qty} ${usageChem.unit} of ${usageChem.name}`
           : `Adjusted ${usageChem.name} to ${newQuantity} ${usageChem.unit}`
 
-      showMessage('success', successMsg)
+      showMessage('success', successMessage)
       setShowUsageModal(false)
       setUsageChem(null)
       fetchChemicals(true)
       fetchTransactions()
-    } catch (err) {
-      console.error(err)
+    } catch (error) {
+      console.error(error)
       showMessage('error', 'Failed to log usage')
     } finally {
       setLoggingUsage(false)
     }
   }
 
-  /* ========================================================================
+  /* ============================================================================
      EXPORT HANDLERS
-  ======================================================================== */
+  ============================================================================ */
 
   const handleExportCurrent = () => {
     const list = filtered.length > 0 ? filtered : chemicals
@@ -1465,12 +1478,12 @@ function App() {
     showMessage('success', 'Full PDF report generated successfully')
   }
 
-  /* ========================================================================
+  /* ============================================================================
      FORM HELPERS
-  ======================================================================== */
+  ============================================================================ */
 
-  const handleChange = (e) => {
-    const { name, value } = e.target
+  const handleChange = (event) => {
+    const { name, value } = event.target
     setFormData((prev) => ({
       ...prev,
       [name]: value,
@@ -1501,6 +1514,22 @@ function App() {
     })
   }
 
+  const toggleClass = (id) => {
+    setFormData((prev) => {
+      const current = prev.chemical_classes || []
+      if (current.includes(id)) {
+        return {
+          ...prev,
+          chemical_classes: current.filter((c) => c !== id),
+        }
+      }
+      return {
+        ...prev,
+        chemical_classes: [...current, id],
+      }
+    })
+  }
+
   const resetForm = () => {
     setFormData({ ...EMPTY_FORM })
     setFormErrors({})
@@ -1522,11 +1551,11 @@ function App() {
       hazard_symbols: Array.isArray(chem.hazard_symbols) ? chem.hazard_symbols : [],
       batch_lot: chem.batch_lot || '',
       supplier: chem.supplier || '',
+      chemical_classes: Array.isArray(chem.chemical_classes) ? chem.chemical_classes : [],
     })
     setEditingId(chem.id)
     setShowForm(true)
 
-    // Smooth scroll to form if needed
     setTimeout(() => {
       if (formRef.current) {
         formRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -1534,9 +1563,73 @@ function App() {
     }, 80)
   }
 
-  /* ========================================================================
+  // Auto-classify when name or hazard symbols change
+  useEffect(() => {
+    if (!showForm) return
+
+    const suggested = autoClassifyChemical(formData.name, formData.hazard_symbols)
+    if (suggested.length > 0) {
+      setFormData((prev) => {
+        const current = new Set(prev.chemical_classes || [])
+        suggested.forEach((c) => current.add(c))
+        return {
+          ...prev,
+          chemical_classes: Array.from(current),
+        }
+      })
+    }
+  }, [formData.name, formData.hazard_symbols, showForm])
+
+  // PubChem Lookup handler
+  const handlePubChemLookup = async () => {
+    const query = formData.cas_number.trim() || formData.name.trim()
+    if (!query) {
+      showMessage('error', 'Enter a chemical name or CAS number first')
+      return
+    }
+
+    setLookingUp(true)
+    try {
+      const result = await lookupPubChem(query)
+      if (!result) {
+        showMessage('error', 'No results found on PubChem')
+        return
+      }
+
+      setFormData((prev) => ({
+        ...prev,
+        molecular_formula: result.molecular_formula || prev.molecular_formula,
+        name: prev.name || result.iupac_name || prev.name,
+      }))
+
+      // Re-run classification with enriched data
+      const suggested = autoClassifyChemical(
+        result.iupac_name || formData.name,
+        formData.hazard_symbols
+      )
+
+      if (suggested.length > 0) {
+        setFormData((prev) => {
+          const current = new Set(prev.chemical_classes || [])
+          suggested.forEach((c) => current.add(c))
+          return {
+            ...prev,
+            chemical_classes: Array.from(current),
+          }
+        })
+      }
+
+      showMessage('success', 'Data loaded from PubChem')
+    } catch (error) {
+      showMessage('error', 'PubChem lookup failed')
+    } finally {
+      setLookingUp(false)
+    }
+  }
+
+  /* ============================================================================
      SELECTION & BULK ACTIONS
-  ======================================================================== */
+  ============================================================================ */
 
   const toggleSelect = (id) => {
     setSelectedIds((prev) => {
@@ -1558,9 +1651,9 @@ function App() {
     }
   }
 
-  /* ========================================================================
+  /* ============================================================================
      DERIVED DATA – FILTERING, SORTING, STATS, COMPATIBILITY
-  ======================================================================== */
+  ============================================================================ */
 
   const locations = useMemo(() => {
     const set = new Set()
@@ -1576,7 +1669,6 @@ function App() {
     const query = search.toLowerCase().trim()
 
     let result = chemicals.filter((c) => {
-      // Text search
       const matchesSearch =
         !query ||
         (c.name && c.name.toLowerCase().includes(query)) ||
@@ -1589,16 +1681,13 @@ function App() {
 
       if (!matchesSearch) return false
 
-      // Preset filters
       if (filter === 'low') return isLow(c)
       if (filter === 'expired') return isExpired(c)
       if (filter === 'soon') return isExpiringSoon(c)
       if (filter === 'no-sds') return !c.sds_filename
 
-      // Location filter
       if (locationFilter && c.location !== locationFilter) return false
 
-      // Hazard filter
       if (hazardFilter) {
         const symbols = c.hazard_symbols || []
         if (!symbols.includes(hazardFilter)) return false
@@ -1607,7 +1696,6 @@ function App() {
       return true
     })
 
-    // Sorting
     result = [...result].sort((a, b) => {
       switch (sortBy) {
         case 'name':
@@ -1670,6 +1758,7 @@ function App() {
     }
   }, [chemicals])
 
+  // Class-based Compatibility Checker (primary safety engine)
   const compatibilityIssues = useMemo(() => {
     const issues = []
     const byLocation = {}
@@ -1685,13 +1774,13 @@ function App() {
         for (let j = i + 1; j < chemsInLoc.length; j++) {
           const chemA = chemsInLoc[i]
           const chemB = chemsInLoc[j]
-          const symbolsA = chemA.hazard_symbols || []
-          const symbolsB = chemB.hazard_symbols || []
+          const classesA = chemA.chemical_classes || []
+          const classesB = chemB.chemical_classes || []
 
-          COMPATIBILITY_RULES.forEach((rule) => {
+          CLASS_COMPATIBILITY_RULES.forEach((rule) => {
             const hasConflict =
-              (symbolsA.includes(rule.a) && symbolsB.includes(rule.b)) ||
-              (symbolsA.includes(rule.b) && symbolsB.includes(rule.a))
+              (classesA.includes(rule.a) && classesB.includes(rule.b)) ||
+              (classesA.includes(rule.b) && classesB.includes(rule.a))
 
             if (hasConflict) {
               issues.push({
@@ -1707,12 +1796,23 @@ function App() {
       }
     })
 
-    return issues
+    // Remove duplicates
+    const unique = []
+    const seen = new Set()
+    issues.forEach((issue) => {
+      const key = `${issue.location}-${issue.chemA}-${issue.chemB}-${issue.reason}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        unique.push(issue)
+      }
+    })
+
+    return unique
   }, [chemicals])
 
-  /* ========================================================================
+  /* ============================================================================
      KEYBOARD SHORTCUTS
-  ======================================================================== */
+  ============================================================================ */
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -1755,9 +1855,9 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [session, showForm])
 
-  /* ========================================================================
+  /* ============================================================================
      RENDER GUARDS
-  ======================================================================== */
+  ============================================================================ */
 
   if (loadingAuth) {
     return (
@@ -1775,9 +1875,9 @@ function App() {
     return <Login onLogin={setSession} />
   }
 
-  /* ========================================================================
+  /* ============================================================================
      MAIN RENDER
-  ======================================================================== */
+  ============================================================================ */
 
   return (
     <div className="app">
@@ -2226,14 +2326,26 @@ function App() {
                   <div className="form-grid">
                     <div className={`form-group ${formErrors.name ? 'error' : ''}`}>
                       <label htmlFor="name">Name *</label>
-                      <input
-                        id="name"
-                        name="name"
-                        value={formData.name}
-                        onChange={handleChange}
-                        placeholder="e.g. Sulfuric Acid"
-                        autoFocus
-                      />
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <input
+                          id="name"
+                          name="name"
+                          value={formData.name}
+                          onChange={handleChange}
+                          placeholder="e.g. Sulfuric Acid"
+                          autoFocus
+                          style={{ flex: 1 }}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-primary"
+                          onClick={handlePubChemLookup}
+                          disabled={lookingUp}
+                          title="Lookup on PubChem"
+                        >
+                          {lookingUp ? '…' : 'Lookup'}
+                        </button>
+                      </div>
                       {formErrors.name && <span className="error-text">{formErrors.name}</span>}
                     </div>
 
@@ -2356,8 +2468,9 @@ function App() {
                     </div>
                   </div>
 
+                  {/* GHS Hazard Symbols */}
                   <div className="hazard-selector">
-                    <label>Hazard Symbols (GHS)</label>
+                    <label>GHS Hazard Symbols</label>
                     <div className="hazard-grid">
                       {HAZARD_OPTIONS.map((h) => {
                         const isActive = formData.hazard_symbols?.includes(h.id)
@@ -2374,6 +2487,30 @@ function App() {
                           >
                             <span className="hazard-emoji">{h.emoji}</span>
                             <span>{h.label}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Chemical Classes */}
+                  <div className="hazard-selector">
+                    <label>Chemical Classes (used for compatibility checking)</label>
+                    <div className="hazard-grid">
+                      {CHEMICAL_CLASSES.map((cls) => {
+                        const isActive = formData.chemical_classes?.includes(cls.id)
+                        return (
+                          <button
+                            type="button"
+                            key={cls.id}
+                            className={`hazard-chip ${isActive ? 'active' : ''}`}
+                            onClick={() => toggleClass(cls.id)}
+                            style={{
+                              borderColor: isActive ? cls.color : undefined,
+                              background: isActive ? `${cls.color}22` : undefined,
+                            }}
+                          >
+                            {cls.label}
                           </button>
                         )
                       })}
@@ -2912,7 +3049,7 @@ function App() {
 
             {compatibilityIssues.length === 0 ? (
               <p style={{ padding: '24px 0', color: 'var(--text-muted)' }}>
-                No compatibility issues were detected based on the current hazard symbols and storage
+                No compatibility issues were detected based on the current chemical classes and storage
                 locations.
               </p>
             ) : (

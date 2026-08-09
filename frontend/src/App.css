@@ -1,6 +1,7 @@
 /* =========================================================
    CHEMICAL INVENTORY – COMPLETE STYLES
    Ultra-modern + Dashboard + Notifications + Compatibility
+   + Chemical Classes + PubChem Lookup support
    ========================================================= */
 
 /* ==================== CSS VARIABLES ==================== */
@@ -92,6 +93,8 @@ a {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  width: 100%;
+  overflow-x: hidden;
 }
 
 /* ==================== LOADING ==================== */
@@ -113,16 +116,6 @@ a {
   border-top-color: var(--primary);
   border-radius: 50%;
   animation: spin 0.75s linear infinite;
-}
-
-.spinner {
-  width: 36px;
-  height: 36px;
-  border: 3px solid var(--border);
-  border-top: 3px solid var(--primary);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  margin-bottom: 16px;
 }
 
 @keyframes spin {
@@ -234,12 +227,6 @@ a {
 .btn-ghost.active {
   background: var(--primary);
   color: white;
-}
-
-.btn-secondary {
-  background: var(--card);
-  color: var(--text);
-  border: 1px solid var(--border);
 }
 
 .btn-sm {
@@ -398,16 +385,17 @@ a {
 /* ==================== TOOLBAR ==================== */
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 20px;
-  flex-wrap: wrap;
   align-items: center;
 }
 
 .search-wrapper {
   position: relative;
-  flex: 1;
-  min-width: 240px;
+  flex: 1 1 220px;
+  min-width: 180px;
+  max-width: 100%;
 }
 
 .search-icon {
@@ -493,8 +481,8 @@ a {
   display: flex;
   gap: 8px;
   align-items: center;
-  margin-left: auto;
   flex-wrap: wrap;
+  margin-left: auto;
 }
 
 .sort-select {
@@ -505,6 +493,7 @@ a {
   color: var(--text);
   font-size: 0.9rem;
   cursor: pointer;
+  max-width: 160px;
 }
 
 .sort-select:focus {
@@ -1022,11 +1011,14 @@ a {
   border-radius: var(--radius);
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
-  overflow: auto;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
 }
 
 .chem-table {
   width: 100%;
+  min-width: 1100px;
   border-collapse: collapse;
 }
 
@@ -1742,6 +1734,250 @@ kbd {
   align-items: center;
   gap: 6px;
 }
+
+/* ==================== UTILITIES ==================== */
+.text-center { text-align: center; }
+.text-muted { color: var(--text-muted); }
+
+.mt-1 { margin-top: 0.25rem; }
+.mt-2 { margin-top: 0.5rem; }
+.mt-3 { margin-top: 0.75rem; }
+.mt-4 { margin-top: 1rem; }
+.mb-1 { margin-bottom: 0.25rem; }
+.mb-2 { margin-bottom: 0.5rem; }
+.mb-3 { margin-bottom: 0.75rem; }
+.mb-4 { margin-bottom: 1rem; }
+
+.flex { display: flex; }
+.flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gap-1 { gap: 0.25rem; }
+.gap-2 { gap: 0.5rem; }
+.gap-3 { gap: 0.75rem; }
+.gap-4 { gap: 1rem; }
+
+.w-full { width: 100%; }
+.hidden { display: none !important; }
+
+/* ==================== RESPONSIVE ==================== */
+@media (max-width: 1024px) {
+  .app {
+    padding: 20px 18px 70px;
+  }
+
+  .header h1 {
+    font-size: 1.45rem;
+  }
+
+  .legend-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .app {
+    padding: 16px 14px 60px;
+  }
+
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .stats-bar {
+    gap: 8px;
+  }
+
+  .stat-card {
+    min-width: 90px;
+    padding: 10px 14px;
+  }
+
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .search-wrapper {
+    min-width: 100%;
+  }
+
+  .filter-pills {
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+
+  .toolbar-right {
+    margin-left: 0;
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .cards-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .form-panel {
+    padding: 22px 18px;
+  }
+
+  .form-actions {
+    flex-direction: column;
+  }
+
+  .form-actions .btn {
+    width: 100%;
+  }
+
+  .landing-nav {
+    padding: 16px 20px;
+  }
+
+  .hero h1 {
+    font-size: 2.3rem;
+  }
+
+  .hero-subtitle {
+    font-size: 1.1rem;
+  }
+
+  .colorful-hero {
+    padding: 70px 20px 80px;
+  }
+
+  .incompatible-row {
+    grid-template-columns: 1fr;
+    text-align: center;
+    gap: 6px;
+  }
+
+  .vs {
+    display: none;
+  }
+
+  .app-footer {
+    flex-direction: column;
+    text-align: center;
+  }
+}
+
+@media (max-width: 480px) {
+  .header h1 {
+    font-size: 1.3rem;
+  }
+
+  .btn {
+    padding: 9px 14px;
+    font-size: 0.85rem;
+  }
+
+  .hero h1 {
+    font-size: 1.9rem;
+  }
+
+  .features-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .problem-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stat-card {
+    flex: 1 1 calc(50% - 8px);
+  }
+}
+
+
+/* ==================== PRINT ==================== */
+@media print {
+  .header-actions,
+  .toolbar,
+  .stats-bar,
+  .bulk-bar,
+  .app-footer,
+  .notif-wrapper,
+  .export-wrapper,
+  .btn,
+  .icon-btn,
+  .theme-toggle,
+  .view-switcher {
+    display: none !important;
+  }
+
+  .app {
+    padding: 0;
+    max-width: 100%;
+  }
+
+  body {
+    background: white;
+    color: black;
+  }
+}
+
+/* ==================== ACCESSIBILITY ==================== */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* ==================== SCROLLBAR ==================== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* ==================== SELECTION ==================== */
+::selection {
+  background: rgba(37, 99, 235, 0.2);
+  color: var(--text);
+}
+
+[data-theme="dark"] ::selection {
+  background: rgba(59, 130, 246, 0.3);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 
 /* ==================== AUTH PAGES ==================== */
 
@@ -3331,247 +3567,6 @@ body {
   }
 }
 
-/* ==================== RESPONSIVE ==================== */
-@media (max-width: 1024px) {
-  .app {
-    padding: 20px 18px 70px;
-  }
-
-  .header h1 {
-    font-size: 1.45rem;
-  }
-
-  .legend-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 768px) {
-  .app {
-    padding: 16px 14px 60px;
-  }
-
-  .header {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .header-actions {
-    width: 100%;
-    justify-content: flex-start;
-  }
-
-  .stats-bar {
-    gap: 8px;
-  }
-
-  .stat-card {
-    min-width: 90px;
-    padding: 10px 14px;
-  }
-
-  .toolbar {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .search-wrapper {
-    min-width: 100%;
-  }
-
-  .filter-pills {
-    overflow-x: auto;
-    padding-bottom: 4px;
-  }
-
-  .toolbar-right {
-    margin-left: 0;
-    width: 100%;
-    justify-content: space-between;
-  }
-
-  .cards-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .form-panel {
-    padding: 22px 18px;
-  }
-
-  .form-actions {
-    flex-direction: column;
-  }
-
-  .form-actions .btn {
-    width: 100%;
-  }
-
-  .landing-nav {
-    padding: 16px 20px;
-  }
-
-  .hero h1 {
-    font-size: 2.3rem;
-  }
-
-  .hero-subtitle {
-    font-size: 1.1rem;
-  }
-
-  .colorful-hero {
-    padding: 70px 20px 80px;
-  }
-
-  .incompatible-row {
-    grid-template-columns: 1fr;
-    text-align: center;
-    gap: 6px;
-  }
-
-  .vs {
-    display: none;
-  }
-
-  .app-footer {
-    flex-direction: column;
-    text-align: center;
-  }
-}
-
-@media (max-width: 480px) {
-  .header h1 {
-    font-size: 1.3rem;
-  }
-
-  .btn {
-    padding: 9px 14px;
-    font-size: 0.85rem;
-  }
-
-  .hero h1 {
-    font-size: 1.9rem;
-  }
-
-  .features-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .problem-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .stat-card {
-    flex: 1 1 calc(50% - 8px);
-  }
-}
-
-/* ==================== UTILITIES ==================== */
-.text-center { text-align: center; }
-.text-muted { color: var(--text-muted); }
-
-.mt-1 { margin-top: 0.25rem; }
-.mt-2 { margin-top: 0.5rem; }
-.mt-3 { margin-top: 0.75rem; }
-.mt-4 { margin-top: 1rem; }
-.mb-1 { margin-bottom: 0.25rem; }
-.mb-2 { margin-bottom: 0.5rem; }
-.mb-3 { margin-bottom: 0.75rem; }
-.mb-4 { margin-bottom: 1rem; }
-
-.flex { display: flex; }
-.flex-center {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.gap-1 { gap: 0.25rem; }
-.gap-2 { gap: 0.5rem; }
-.gap-3 { gap: 0.75rem; }
-.gap-4 { gap: 1rem; }
-
-.w-full { width: 100%; }
-.hidden { display: none !important; }
-
-/* ==================== PRINT ==================== */
-@media print {
-  .header-actions,
-  .toolbar,
-  .stats-bar,
-  .bulk-bar,
-  .app-footer,
-  .notif-wrapper,
-  .export-wrapper,
-  .btn,
-  .icon-btn,
-  .theme-toggle,
-  .view-switcher {
-    display: none !important;
-  }
-
-  .app {
-    padding: 0;
-    max-width: 100%;
-  }
-
-  body {
-    background: white;
-    color: black;
-  }
-}
-
-/* ==================== ACCESSIBILITY ==================== */
-:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-}
-
-button:focus-visible,
-input:focus-visible,
-select:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-}
-
-/* ==================== SCROLLBAR ==================== */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: var(--bg);
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
-}
-
-/* ==================== SELECTION ==================== */
-::selection {
-  background: rgba(37, 99, 235, 0.2);
-  color: var(--text);
-}
-
-[data-theme="dark"] ::selection {
-  background: rgba(59, 130, 246, 0.3);
-}
-
-/* Reduced motion */
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-}
 
 /* =========================================================
    STRONG FIX – Inventory view overflowing
