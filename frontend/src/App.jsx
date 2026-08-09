@@ -7,33 +7,44 @@ import autoTable from 'jspdf-autotable'
 import './App.css'
 
 /* ============================================================================
-   CHEMICAL INVENTORY APPLICATION
-   Full-featured modern inventory system
-   Features included:
-   - Authentication (Supabase)
-   - Full CRUD for chemicals
-   - SDS upload / download
-   - Low stock + expiry notifications (browser + in-app)
+   CHEMICAL INVENTORY SYSTEM
+   --------------------------------------------------------------------------
+   Full-featured laboratory chemical inventory application
+   
+   Core Features:
+   - Supabase Authentication
+   - Full CRUD operations for chemicals
+   - SDS file upload and download
+   - Low stock and expiry notifications (in-app + browser)
    - Usage / Transaction logging
-   - Export to CSV + professional PDF reports
-   - Batch / Lot number + Supplier
+   - CSV and professional PDF export
    - Dashboard overview
-   - Advanced filters (location + hazard)
-   - Chemical Compatibility Checker
-   - Bulk actions
-   - Card + Table views
+   - Batch / Lot number + Supplier tracking
+   - Advanced filtering and sorting
+   - Card view + Table view
    - Dark / Light theme
-   - Command palette
-   - Keyboard shortcuts
+   - Command palette + keyboard shortcuts
+   - Chemical Classes system
+   - Class-based Compatibility Checker
+   - Expanded GHS hazard symbols
+   - PubChem lookup (auto-fill formula + suggested classes)
+   - Auto-classification of chemicals
+   
+   This file is intentionally written in a verbose, well-commented style
+   for maintainability and clarity.
 ============================================================================ */
 
 /* ============================================================================
-   CONSTANTS
+   SECTION 1: CONSTANTS
 ============================================================================ */
 
-// ====================== CHEMICAL CLASSES ======================
+/**
+ * Chemical Classes used for compatibility checking.
+ * These are the primary way we determine if two chemicals
+ * should not be stored together.
+ */
 const CHEMICAL_CLASSES = [
-  { id: 'acid', label: 'Acid (Strong/Weak)', color: '#ef4444' },
+  { id: 'acid', label: 'Acid (Strong / Weak)', color: '#ef4444' },
   { id: 'base', label: 'Base / Alkali', color: '#3b82f6' },
   { id: 'oxidizer', label: 'Oxidizer', color: '#eab308' },
   { id: 'flammable_solvent', label: 'Flammable Solvent', color: '#f97316' },
@@ -48,7 +59,11 @@ const CHEMICAL_CLASSES = [
   { id: 'compressed_gas', label: 'Compressed Gas', color: '#6366f1' },
 ]
 
-// ====================== EXPANDED GHS HAZARDS ======================
+/**
+ * Expanded GHS Hazard Symbols.
+ * These are used both for display and as a secondary signal
+ * for auto-classification.
+ */
 const HAZARD_OPTIONS = [
   { id: 'explosive', label: 'Explosive', emoji: '💥', color: '#ef4444' },
   { id: 'flammable', label: 'Flammable', emoji: '🔥', color: '#f97316' },
@@ -59,34 +74,146 @@ const HAZARD_OPTIONS = [
   { id: 'harmful', label: 'Harmful / Irritant', emoji: '⚠️', color: '#f59e0b' },
   { id: 'health', label: 'Health Hazard', emoji: '🫁', color: '#ec4899' },
   { id: 'environmental', label: 'Environmental', emoji: '🌍', color: '#22c55e' },
-  // Extra useful ones
   { id: 'acute_toxicity', label: 'Acute Toxicity', emoji: '☠️', color: '#7f1d1d' },
-  { id: 'aspiration', label: 'Aspiration Hazard', emoji: '🫁', color: '#be185d' },
   { id: 'carcinogen', label: 'Carcinogen', emoji: '☢️', color: '#9f1239' },
+  { id: 'aspiration', label: 'Aspiration Hazard', emoji: '🫁', color: '#be185d' },
 ]
 
-// ====================== CLASS COMPATIBILITY MATRIX ======================
+/**
+ * Primary compatibility rules based on Chemical Classes.
+ * This is the main safety engine of the application.
+ */
 const CLASS_COMPATIBILITY_RULES = [
-  // High risk
-  { a: 'acid', b: 'base', risk: 'High', reason: 'Acids and bases react violently and generate heat' },
-  { a: 'acid', b: 'cyanide', risk: 'High', reason: 'Acids + cyanides release highly toxic hydrogen cyanide gas' },
-  { a: 'acid', b: 'sulfide', risk: 'High', reason: 'Acids + sulfides release toxic hydrogen sulfide gas' },
-  { a: 'acid', b: 'water_reactive', risk: 'High', reason: 'Many water-reactive chemicals react violently with acids' },
-  { a: 'oxidizer', b: 'flammable_solvent', risk: 'High', reason: 'Oxidizers + flammable solvents can cause fire or explosion' },
-  { a: 'oxidizer', b: 'organic', risk: 'High', reason: 'Oxidizers + organic materials are a serious fire/explosion risk' },
-  { a: 'oxidizer', b: 'water_reactive', risk: 'High', reason: 'Dangerous combination – high reactivity' },
-  { a: 'water_reactive', b: 'flammable_solvent', risk: 'High', reason: 'Water-reactive chemicals can ignite flammable solvents' },
-  { a: 'peroxide_former', b: 'oxidizer', risk: 'High', reason: 'Peroxide formers become extremely dangerous with oxidizers' },
-  { a: 'explosive', b: 'oxidizer', risk: 'High', reason: 'Oxidizers can sensitize or initiate explosives' },
-  { a: 'halogen', b: 'flammable_solvent', risk: 'High', reason: 'Halogens react dangerously with many organic solvents' },
+  // High risk combinations
+  {
+    a: 'acid',
+    b: 'base',
+    risk: 'High',
+    reason: 'Acids and bases react violently and can generate significant heat and splashing.',
+  },
+  {
+    a: 'acid',
+    b: 'cyanide',
+    risk: 'High',
+    reason: 'Acids + cyanides release highly toxic hydrogen cyanide (HCN) gas.',
+  },
+  {
+    a: 'acid',
+    b: 'sulfide',
+    risk: 'High',
+    reason: 'Acids + sulfides release toxic hydrogen sulfide (H₂S) gas.',
+  },
+  {
+    a: 'acid',
+    b: 'water_reactive',
+    risk: 'High',
+    reason: 'Many water-reactive chemicals react violently when mixed with acids.',
+  },
+  {
+    a: 'oxidizer',
+    b: 'flammable_solvent',
+    risk: 'High',
+    reason: 'Oxidizers mixed with flammable solvents can cause fire or explosion.',
+  },
+  {
+    a: 'oxidizer',
+    b: 'organic',
+    risk: 'High',
+    reason: 'Oxidizers + organic materials are a serious fire and explosion hazard.',
+  },
+  {
+    a: 'oxidizer',
+    b: 'water_reactive',
+    risk: 'High',
+    reason: 'This combination is highly reactive and dangerous.',
+  },
+  {
+    a: 'water_reactive',
+    b: 'flammable_solvent',
+    risk: 'High',
+    reason: 'Water-reactive chemicals can ignite flammable solvents.',
+  },
+  {
+    a: 'peroxide_former',
+    b: 'oxidizer',
+    risk: 'High',
+    reason: 'Peroxide formers become extremely dangerous in the presence of oxidizers.',
+  },
+  {
+    a: 'explosive',
+    b: 'oxidizer',
+    risk: 'High',
+    reason: 'Oxidizers can sensitize or initiate explosive materials.',
+  },
+  {
+    a: 'halogen',
+    b: 'flammable_solvent',
+    risk: 'High',
+    reason: 'Halogens react dangerously with many organic solvents.',
+  },
 
-  // Medium risk
-  { a: 'acid', b: 'flammable_solvent', risk: 'Medium', reason: 'Acids can damage containers and increase fire risk' },
-  { a: 'base', b: 'flammable_solvent', risk: 'Medium', reason: 'Bases can degrade containers of flammable solvents' },
-  { a: 'toxic', b: 'flammable_solvent', risk: 'Medium', reason: 'Fire involving toxics creates additional hazards' },
-  { a: 'compressed_gas', b: 'flammable_solvent', risk: 'Medium', reason: 'Compressed gases near flammables increase risk' },
+  // Medium risk combinations
+  {
+    a: 'acid',
+    b: 'flammable_solvent',
+    risk: 'Medium',
+    reason: 'Acids can damage containers and increase secondary fire hazards.',
+  },
+  {
+    a: 'base',
+    b: 'flammable_solvent',
+    risk: 'Medium',
+    reason: 'Bases can degrade containers holding flammable solvents.',
+  },
+  {
+    a: 'toxic',
+    b: 'flammable_solvent',
+    risk: 'Medium',
+    reason: 'A fire involving toxic materials creates additional serious hazards.',
+  },
+  {
+    a: 'compressed_gas',
+    b: 'flammable_solvent',
+    risk: 'Medium',
+    reason: 'Compressed gases stored near flammables increase overall risk.',
+  },
 ]
 
+/**
+ * Available units for quantity tracking.
+ */
+const UNITS = ['g', 'mg', 'kg', 'ml', 'L', 'µl', 'mol', 'units']
+
+/**
+ * Sorting options available in the toolbar.
+ */
+const SORT_OPTIONS = [
+  { value: 'name', label: 'Name (A–Z)' },
+  { value: 'name-desc', label: 'Name (Z–A)' },
+  { value: 'quantity', label: 'Quantity (High → Low)' },
+  { value: 'quantity-asc', label: 'Quantity (Low → High)' },
+  { value: 'expiry', label: 'Expiry (Soonest first)' },
+  { value: 'expiry-desc', label: 'Expiry (Latest first)' },
+  { value: 'location', label: 'Location' },
+  { value: 'supplier', label: 'Supplier' },
+  { value: 'updated', label: 'Recently Updated' },
+]
+
+/**
+ * Quick filter presets shown as pills.
+ */
+const FILTER_PRESETS = [
+  { id: 'all', label: 'All Chemicals', icon: '📦' },
+  { id: 'low', label: 'Low Stock', icon: '📉' },
+  { id: 'soon', label: 'Expiring Soon', icon: '⏳' },
+  { id: 'expired', label: 'Expired', icon: '🚫' },
+  { id: 'no-sds', label: 'Missing SDS', icon: '📄' },
+]
+
+/**
+ * Empty form state used when adding a new chemical
+ * or after resetting the form.
+ */
 const EMPTY_FORM = {
   name: '',
   cas_number: '',
@@ -100,202 +227,34 @@ const EMPTY_FORM = {
   hazard_symbols: [],
   batch_lot: '',
   supplier: '',
-  chemical_classes: [],          // ← NEW
+  chemical_classes: [],
 }
 
-// Simple auto-classification based on name + GHS symbols
-const autoClassifyChemical = (name = '', hazardSymbols = []) => {
-  const classes = new Set()
-  const lower = name.toLowerCase()
+/* ============================================================================
+   SECTION 2: PURE HELPER FUNCTIONS
+============================================================================ */
 
-  // From name keywords
-  if (lower.includes('acid') || lower.includes('hcl') || lower.includes('h2so4') || lower.includes('hno3')) {
-    classes.add('acid')
-  }
-  if (lower.includes('hydroxide') || lower.includes('naoh') || lower.includes('koh') || lower.includes('ammonia')) {
-    classes.add('base')
-  }
-  if (lower.includes('peroxide') || lower.includes('nitrate') || lower.includes('permanganate') || lower.includes('chromate')) {
-    classes.add('oxidizer')
-  }
-  if (lower.includes('ether') || lower.includes('thf') || lower.includes('dioxane')) {
-    classes.add('peroxide_former')
-    classes.add('flammable_solvent')
-  }
-  if (lower.includes('sodium') || lower.includes('lithium') || lower.includes('potassium') && !lower.includes('hydroxide')) {
-    classes.add('water_reactive')
-  }
-  if (lower.includes('cyanide')) classes.add('cyanide')
-  if (lower.includes('sulfide')) classes.add('sulfide')
-  if (lower.includes('chlorine') || lower.includes('bromine') || lower.includes('iodine')) {
-    classes.add('halogen')
-  }
-
-  // From GHS symbols
-  if (hazardSymbols.includes('flammable')) classes.add('flammable_solvent')
-  if (hazardSymbols.includes('oxidizing')) classes.add('oxidizer')
-  if (hazardSymbols.includes('corrosive')) {
-    // could be acid or base – leave for manual
-  }
-  if (hazardSymbols.includes('explosive')) classes.add('explosive')
-  if (hazardSymbols.includes('gas')) classes.add('compressed_gas')
-  if (hazardSymbols.includes('toxic') || hazardSymbols.includes('acute_toxicity')) {
-    classes.add('toxic')
-  }
-
-  return Array.from(classes)
-}
-
-{/* Chemical Classes */}
-<div className="hazard-selector">
-  <label>Chemical Classes (for compatibility checking)</label>
-  <div className="hazard-grid">
-    {CHEMICAL_CLASSES.map((cls) => {
-      const active = formData.chemical_classes?.includes(cls.id)
-      return (
-        <button
-          type="button"
-          key={cls.id}
-          className={`hazard-chip ${active ? 'active' : ''}`}
-          onClick={() => {
-            setFormData(prev => {
-              const current = prev.chemical_classes || []
-              if (current.includes(cls.id)) {
-                return { ...prev, chemical_classes: current.filter(c => c !== cls.id) }
-              }
-              return { ...prev, chemical_classes: [...current, cls.id] }
-            })
-          }}
-          style={{
-            borderColor: active ? cls.color : undefined,
-            background: active ? `${cls.color}22` : undefined,
-          }}
-        >
-          {cls.label}
-        </button>
-      )
-    })}
-  </div>
-</div>
-
-// Auto-classify when name or hazard symbols change
-useEffect(() => {
-  if (!showForm) return
-
-  const suggested = autoClassifyChemical(formData.name, formData.hazard_symbols)
-  if (suggested.length > 0) {
-    setFormData(prev => {
-      // Only add missing ones, don’t remove user choices
-      const current = new Set(prev.chemical_classes || [])
-      suggested.forEach(c => current.add(c))
-      return { ...prev, chemical_classes: Array.from(current) }
-    })
-  }
-}, [formData.name, formData.hazard_symbols, showForm])
-
-const lookupPubChem = async (casOrName) => {
-  if (!casOrName || casOrName.length < 3) return null
-
+/**
+ * Calculates how many days remain until a given date.
+ * Returns negative numbers for dates in the past.
+ */
+const daysUntil = (dateStr) => {
+  if (!dateStr) return null
   try {
-    // First try to get CID
-    const searchUrl = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${encodeURIComponent(casOrName)}/cids/JSON`
-    const searchRes = await fetch(searchUrl)
-    if (!searchRes.ok) return null
-
-    const searchData = await searchRes.json()
-    const cid = searchData?.IdentifierList?.CID?.[0]
-    if (!cid) return null
-
-    // Get properties
-    const propUrl = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/property/MolecularFormula,IUPACName/JSON`
-    const propRes = await fetch(propUrl)
-    if (!propRes.ok) return null
-
-    const propData = await propRes.json()
-    const props = propData?.PropertyTable?.Properties?.[0]
-
-    return {
-      molecular_formula: props?.MolecularFormula || null,
-      iupac_name: props?.IUPACName || null,
-    }
+    const now = new Date()
+    const target = new Date(dateStr)
+    const diffMs = target.getTime() - now.getTime()
+    const diffDays = diffMs / (1000 * 60 * 60 * 24)
+    return Math.ceil(diffDays)
   } catch (err) {
-    console.warn('PubChem lookup failed', err)
+    console.warn('daysUntil error:', err)
     return null
   }
 }
 
-const compatibilityIssues = useMemo(() => {
-  const issues = []
-  const byLocation = {}
-
-  chemicals.forEach((c) => {
-    const loc = (c.location || 'Unassigned').trim()
-    if (!byLocation[loc]) byLocation[loc] = []
-    byLocation[loc].push(c)
-  })
-
-  Object.entries(byLocation).forEach(([location, chemsInLoc]) => {
-    for (let i = 0; i < chemsInLoc.length; i++) {
-      for (let j = i + 1; j < chemsInLoc.length; j++) {
-        const chemA = chemsInLoc[i]
-        const chemB = chemsInLoc[j]
-
-        const classesA = chemA.chemical_classes || []
-        const classesB = chemB.chemical_classes || []
-        const symbolsA = chemA.hazard_symbols || []
-        const symbolsB = chemB.hazard_symbols || []
-
-        // 1. Primary check: Chemical Classes
-        CLASS_COMPATIBILITY_RULES.forEach((rule) => {
-          const match =
-            (classesA.includes(rule.a) && classesB.includes(rule.b)) ||
-            (classesA.includes(rule.b) && classesB.includes(rule.a))
-
-          if (match) {
-            issues.push({
-              location,
-              chemA: chemA.name,
-              chemB: chemB.name,
-              risk: rule.risk,
-              reason: rule.reason,
-              source: 'class',
-            })
-          }
-        })
-
-        // 2. Secondary check: GHS symbols (fallback)
-        // (you can keep the old GHS rules here if you want)
-      }
-    }
-  })
-
-  // Remove duplicates
-  const unique = []
-  const seen = new Set()
-  issues.forEach((issue) => {
-    const key = `${issue.location}-${issue.chemA}-${issue.chemB}-${issue.reason}`
-    if (!seen.has(key)) {
-      seen.add(key)
-      unique.push(issue)
-    }
-  })
-
-  return unique
-}, [chemicals])
-
-/* ============================================================================
-   HELPER FUNCTIONS
-============================================================================ */
-
-const daysUntil = (dateStr) => {
-  if (!dateStr) return null
-  const now = new Date()
-  const target = new Date(dateStr)
-  const diffMs = target - now
-  const diffDays = diffMs / (1000 * 60 * 60 * 24)
-  return Math.ceil(diffDays)
-}
-
+/**
+ * Formats a date string into a human-readable short format.
+ */
 const formatDate = (dateStr) => {
   if (!dateStr) return '—'
   try {
@@ -304,11 +263,14 @@ const formatDate = (dateStr) => {
       month: 'short',
       day: 'numeric',
     })
-  } catch {
+  } catch (err) {
     return dateStr
   }
 }
 
+/**
+ * Formats a date-time string for transaction history.
+ */
 const formatDateTime = (dateStr) => {
   if (!dateStr) return '—'
   try {
@@ -319,29 +281,42 @@ const formatDateTime = (dateStr) => {
       hour: '2-digit',
       minute: '2-digit',
     })
-  } catch {
+  } catch (err) {
     return dateStr
   }
 }
 
+/**
+ * Returns true if the chemical is past its expiry date.
+ */
 const isExpired = (chemical) => {
   if (!chemical || !chemical.expiry_date) return false
-  return daysUntil(chemical.expiry_date) < 0
+  const days = daysUntil(chemical.expiry_date)
+  return days !== null && days < 0
 }
 
+/**
+ * Returns true if current quantity is at or below minimum stock level.
+ */
 const isLow = (chemical) => {
   if (!chemical) return false
-  const qty = Number(chemical.quantity) || 0
-  const min = Number(chemical.min_stock) || 0
-  return qty <= min
+  const quantity = Number(chemical.quantity) || 0
+  const minStock = Number(chemical.min_stock) || 0
+  return quantity <= minStock
 }
 
+/**
+ * Returns true if the chemical expires within the next 30 days.
+ */
 const isExpiringSoon = (chemical) => {
   if (!chemical || !chemical.expiry_date) return false
   const days = daysUntil(chemical.expiry_date)
   return days !== null && days >= 0 && days <= 30
 }
 
+/**
+ * Returns a human-readable status string for a chemical.
+ */
 const getStatus = (chemical) => {
   if (isExpired(chemical)) return 'Expired'
   if (isLow(chemical)) return 'Low Stock'
@@ -349,6 +324,9 @@ const getStatus = (chemical) => {
   return 'OK'
 }
 
+/**
+ * Returns the CSS class used for status badges.
+ */
 const getStatusBadgeClass = (chemical) => {
   if (isExpired(chemical)) return 'badge badge-red'
   if (isLow(chemical)) return 'badge badge-orange'
@@ -357,36 +335,179 @@ const getStatusBadgeClass = (chemical) => {
 }
 
 /* ============================================================================
-   CSV EXPORT HELPERS
+   SECTION 3: AUTO-CLASSIFICATION ENGINE
 ============================================================================ */
 
+/**
+ * Attempts to automatically suggest chemical classes based on
+ * the chemical name and currently selected GHS hazard symbols.
+ *
+ * This is a heuristic system. It is helpful but not perfect.
+ * The user can always override the suggestions manually.
+ */
+const autoClassifyChemical = (name = '', hazardSymbols = []) => {
+  const classes = new Set()
+  const lowerName = (name || '').toLowerCase().trim()
+
+  // -------- Name-based rules --------
+  if (/(acid|hcl|h2so4|hno3|acetic|formic|phosphoric|hydrochloric|sulfuric|nitric)/.test(lowerName)) {
+    classes.add('acid')
+  }
+
+  if (/(hydroxide|naoh|koh|ammonia|amine|sodium hydroxide|potassium hydroxide)/.test(lowerName)) {
+    classes.add('base')
+  }
+
+  if (/(peroxide|nitrate|permanganate|chromate|dichromate|hypochlorite|hydrogen peroxide)/.test(lowerName)) {
+    classes.add('oxidizer')
+  }
+
+  if (/(ether|thf|dioxane|tetrahydrofuran|diethyl ether)/.test(lowerName)) {
+    classes.add('peroxide_former')
+    classes.add('flammable_solvent')
+  }
+
+  if (/(acetone|ethanol|methanol|isopropanol|hexane|toluene|xylene|benzene|ether|ipa)/.test(lowerName)) {
+    classes.add('flammable_solvent')
+  }
+
+  if (/(sodium metal|lithium|potassium metal|calcium carbide|acid anhydride)/.test(lowerName)) {
+    classes.add('water_reactive')
+  }
+
+  if (/cyanide/.test(lowerName)) {
+    classes.add('cyanide')
+  }
+
+  if (/sulfide/.test(lowerName)) {
+    classes.add('sulfide')
+  }
+
+  if (/(chlorine|bromine|iodine|fluorine)/.test(lowerName)) {
+    classes.add('halogen')
+  }
+
+  if (/(picric|trinitro|azide)/.test(lowerName)) {
+    classes.add('explosive')
+  }
+
+  // -------- GHS symbol based rules --------
+  if (Array.isArray(hazardSymbols)) {
+    if (hazardSymbols.includes('flammable')) {
+      classes.add('flammable_solvent')
+    }
+    if (hazardSymbols.includes('oxidizing')) {
+      classes.add('oxidizer')
+    }
+    if (hazardSymbols.includes('explosive')) {
+      classes.add('explosive')
+    }
+    if (hazardSymbols.includes('gas')) {
+      classes.add('compressed_gas')
+    }
+    if (hazardSymbols.includes('toxic') || hazardSymbols.includes('acute_toxicity')) {
+      classes.add('toxic')
+    }
+  }
+
+  return Array.from(classes)
+}
+
+/* ============================================================================
+   SECTION 4: PUBCHEM LOOKUP
+============================================================================ */
+
+/**
+ * Looks up a chemical on PubChem using either a name or CAS number.
+ * Returns basic information such as molecular formula and preferred name.
+ *
+ * Note: The free PubChem API does not always return reliable GHS data,
+ * so we mainly use it for formula and name enrichment.
+ */
+const lookupPubChem = async (query) => {
+  if (!query || typeof query !== 'string' || query.trim().length < 2) {
+    return null
+  }
+
+  const cleanedQuery = query.trim()
+
+  try {
+    // Step 1: Resolve the query to a PubChem CID
+    const searchUrl = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${encodeURIComponent(cleanedQuery)}/cids/JSON`
+    const searchResponse = await fetch(searchUrl)
+
+    if (!searchResponse.ok) {
+      return null
+    }
+
+    const searchData = await searchResponse.json()
+    const cid = searchData?.IdentifierList?.CID?.[0]
+
+    if (!cid) {
+      return null
+    }
+
+    // Step 2: Fetch useful properties for that CID
+    const propUrl = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/property/MolecularFormula,IUPACName,Title/JSON`
+    const propResponse = await fetch(propUrl)
+
+    if (!propResponse.ok) {
+      return null
+    }
+
+    const propData = await propResponse.json()
+    const properties = propData?.PropertyTable?.Properties?.[0]
+
+    if (!properties) {
+      return null
+    }
+
+    return {
+      molecular_formula: properties.MolecularFormula || null,
+      iupac_name: properties.IUPACName || properties.Title || null,
+      cid: cid,
+    }
+  } catch (error) {
+    console.warn('PubChem lookup failed:', error)
+    return null
+  }
+}
+
+/* ============================================================================
+   SECTION 5: CSV & PDF EXPORT HELPERS
+============================================================================ */
+
+/**
+ * Generic CSV download helper.
+ * Adds a UTF-8 BOM so Microsoft Excel opens the file correctly.
+ */
 const downloadCSV = (filename, rows) => {
-  if (!rows || rows.length === 0) {
-    console.warn('No data to export')
+  if (!rows || !Array.isArray(rows) || rows.length === 0) {
+    console.warn('downloadCSV called with no data')
     return
   }
 
   const headers = Object.keys(rows[0])
+
   const escapeCell = (value) => {
-    const str = value === null || value === undefined ? '' : String(value)
-    const escaped = str.replace(/"/g, '""')
+    const stringValue = value === null || value === undefined ? '' : String(value)
+    const escaped = stringValue.replace(/"/g, '""')
     return `"${escaped}"`
   }
 
   const lines = [
     headers.join(','),
-    ...rows.map((row) => headers.map((h) => escapeCell(row[h])).join(',')),
+    ...rows.map((row) => headers.map((header) => escapeCell(row[header])).join(',')),
   ]
 
   const csvContent = lines.join('\n')
-  // UTF-8 BOM so Microsoft Excel opens the file correctly
   const blob = new Blob(['\uFEFF' + csvContent], {
     type: 'text/csv;charset=utf-8;',
   })
 
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
-  link.setAttribute('href', url)
+  link.href = url
   link.setAttribute('download', filename)
   link.style.visibility = 'hidden'
   document.body.appendChild(link)
@@ -395,47 +516,57 @@ const downloadCSV = (filename, rows) => {
   URL.revokeObjectURL(url)
 }
 
+/**
+ * Exports the current list of chemicals to CSV.
+ */
 const exportChemicalsCSV = (list, filename = 'chemicals.csv') => {
-  const rows = list.map((c) => ({
-    Name: c.name || '',
-    'Molecular Formula': c.molecular_formula || '',
-    'CAS Number': c.cas_number || '',
-    Quantity: c.quantity ?? '',
-    Unit: c.unit || '',
-    Location: c.location || '',
-    'Expiry Date': c.expiry_date || '',
-    'Min Stock': c.min_stock ?? '',
-    'Batch / Lot': c.batch_lot || '',
-    Supplier: c.supplier || '',
-    'Hazard Notes': c.hazard_notes || '',
-    'Hazard Symbols': Array.isArray(c.hazard_symbols) ? c.hazard_symbols.join(', ') : '',
-    'SDS Filename': c.sds_filename ? c.sds_filename.split('/').pop() : '',
-    Status: getStatus(c),
+  const rows = list.map((chemical) => ({
+    Name: chemical.name || '',
+    'Molecular Formula': chemical.molecular_formula || '',
+    'CAS Number': chemical.cas_number || '',
+    Quantity: chemical.quantity ?? '',
+    Unit: chemical.unit || '',
+    Location: chemical.location || '',
+    'Batch / Lot': chemical.batch_lot || '',
+    Supplier: chemical.supplier || '',
+    'Expiry Date': chemical.expiry_date || '',
+    'Min Stock': chemical.min_stock ?? '',
+    'Chemical Classes': Array.isArray(chemical.chemical_classes)
+      ? chemical.chemical_classes.join(', ')
+      : '',
+    'Hazard Symbols': Array.isArray(chemical.hazard_symbols)
+      ? chemical.hazard_symbols.join(', ')
+      : '',
+    'Hazard Notes': chemical.hazard_notes || '',
+    Status: getStatus(chemical),
   }))
 
   downloadCSV(filename, rows)
 }
 
+/**
+ * Exports the transaction / usage history to CSV.
+ */
 const exportTransactionsCSV = (list) => {
-  const rows = list.map((t) => ({
-    'Date & Time': formatDateTime(t.created_at),
-    Chemical: t.chemical_name || '',
-    Action: t.type || '',
-    'Quantity Change': t.quantity_change ?? '',
-    Unit: t.unit || '',
-    'Quantity Before': t.quantity_before ?? '',
-    'Quantity After': t.quantity_after ?? '',
-    User: t.user_email || '',
-    Notes: t.notes || '',
+  const rows = list.map((transaction) => ({
+    'Date & Time': formatDateTime(transaction.created_at),
+    Chemical: transaction.chemical_name || '',
+    Action: transaction.type || '',
+    'Quantity Change': transaction.quantity_change ?? '',
+    Unit: transaction.unit || '',
+    'Quantity Before': transaction.quantity_before ?? '',
+    'Quantity After': transaction.quantity_after ?? '',
+    User: transaction.user_email || '',
+    Notes: transaction.notes || '',
   }))
 
-  downloadCSV(`usage-history-${new Date().toISOString().slice(0, 10)}.csv`, rows)
+  const filename = `usage-history-${new Date().toISOString().slice(0, 10)}.csv`
+  downloadCSV(filename, rows)
 }
 
-/* ============================================================================
-   PDF REPORT GENERATOR (jsPDF + autoTable)
-============================================================================ */
-
+/**
+ * Generates a professional landscape PDF report using jsPDF + autoTable.
+ */
 const generatePDFReport = (chemicalsList, title = 'Chemical Inventory Report') => {
   const doc = new jsPDF({
     orientation: 'landscape',
@@ -463,43 +594,43 @@ const generatePDFReport = (chemicalsList, title = 'Chemical Inventory Report') =
   doc.text(`Generated: ${new Date().toLocaleString()}`, pageWidth - 14, 12, { align: 'right' })
   doc.text(`Total chemicals: ${chemicalsList.length}`, pageWidth - 14, 20, { align: 'right' })
 
-  // Summary statistics
+  // Summary statistics box
   const lowCount = chemicalsList.filter(isLow).length
   const expiredCount = chemicalsList.filter(isExpired).length
   const soonCount = chemicalsList.filter(isExpiringSoon).length
 
   doc.setFillColor(241, 245, 249)
-  doc.roundedRect(14, 34, pageWidth - 28, 18, 3, 3, 'F')
+  doc.roundedRect(14, 34, pageWidth - 28, 16, 3, 3, 'F')
 
   doc.setFontSize(9)
   doc.setFont('helvetica', 'bold')
   doc.setTextColor(15, 23, 42)
-  doc.text(`Total: ${chemicalsList.length}`, 22, 45)
+  doc.text(`Total: ${chemicalsList.length}`, 20, 44)
 
   doc.setTextColor(217, 119, 6)
-  doc.text(`Low Stock: ${lowCount}`, 60, 45)
+  doc.text(`Low Stock: ${lowCount}`, 60, 44)
 
   doc.setTextColor(202, 138, 4)
-  doc.text(`Expiring Soon: ${soonCount}`, 110, 45)
+  doc.text(`Expiring Soon: ${soonCount}`, 110, 44)
 
   doc.setTextColor(220, 38, 38)
-  doc.text(`Expired: ${expiredCount}`, 170, 45)
+  doc.text(`Expired: ${expiredCount}`, 165, 44)
 
   // Table data
-  const tableBody = chemicalsList.map((c) => [
-    c.name || '',
-    c.molecular_formula || '—',
-    c.cas_number || '—',
-    `${c.quantity ?? 0} ${c.unit || ''}`,
-    c.location || '—',
-    c.batch_lot || '—',
-    c.supplier || '—',
-    formatDate(c.expiry_date),
-    getStatus(c),
+  const tableBody = chemicalsList.map((chemical) => [
+    chemical.name || '',
+    chemical.molecular_formula || '—',
+    chemical.cas_number || '—',
+    `${chemical.quantity ?? 0} ${chemical.unit || ''}`,
+    chemical.location || '—',
+    chemical.batch_lot || '—',
+    chemical.supplier || '—',
+    formatDate(chemical.expiry_date),
+    getStatus(chemical),
   ])
 
   autoTable(doc, {
-    startY: 58,
+    startY: 56,
     head: [['Name', 'Formula', 'CAS', 'Quantity', 'Location', 'Batch/Lot', 'Supplier', 'Expiry', 'Status']],
     body: tableBody,
     theme: 'striped',
@@ -550,26 +681,28 @@ const generatePDFReport = (chemicalsList, title = 'Chemical Inventory Report') =
 }
 
 /* ============================================================================
-   MAIN APP COMPONENT
+   SECTION 6: MAIN APP COMPONENT - START
 ============================================================================ */
 
 function App() {
-  /* ---------- Auth & Session ---------- */
+  /* ---------- Authentication & Session State ---------- */
   const [session, setSession] = useState(null)
   const [loadingAuth, setLoadingAuth] = useState(true)
   const [showLogin, setShowLogin] = useState(false)
 
-  /* ---------- Core Data ---------- */
+  /* ---------- Core Data State ---------- */
   const [chemicals, setChemicals] = useState([])
   const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
 
-  /* ---------- UI State ---------- */
+  /* ---------- UI Control State ---------- */
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
   const [sortBy, setSortBy] = useState('name')
-  const [viewMode, setViewMode] = useState(() => localStorage.getItem('viewMode') || 'table')
+  const [viewMode, setViewMode] = useState(() => {
+    return localStorage.getItem('viewMode') || 'table'
+  })
   const [mainView, setMainView] = useState('inventory') // 'inventory' | 'dashboard'
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState(null)
@@ -583,17 +716,17 @@ function App() {
   const [locationFilter, setLocationFilter] = useState('')
   const [hazardFilter, setHazardFilter] = useState('')
 
-  /* ---------- Notifications ---------- */
+  /* ---------- Notification State ---------- */
   const [notifications, setNotifications] = useState([])
   const [notifOpen, setNotifOpen] = useState(false)
   const [notifPermission, setNotifPermission] = useState(
     typeof Notification !== 'undefined' ? Notification.permission : 'default'
   )
-  const [notificationsEnabled, setNotificationsEnabled] = useState(
-    () => localStorage.getItem('notificationsEnabled') !== 'false'
-  )
+  const [notificationsEnabled, setNotificationsEnabled] = useState(() => {
+    return localStorage.getItem('notificationsEnabled') !== 'false'
+  })
 
-  /* ---------- Usage / Transaction Log ---------- */
+  /* ---------- Usage / Transaction Log State ---------- */
   const [showUsageModal, setShowUsageModal] = useState(false)
   const [usageChem, setUsageChem] = useState(null)
   const [usageForm, setUsageForm] = useState({
@@ -606,10 +739,10 @@ function App() {
   const [historySearch, setHistorySearch] = useState('')
   const [loggingUsage, setLoggingUsage] = useState(false)
 
-  /* ---------- Theme ---------- */
+  /* ---------- Theme State ---------- */
   const [theme, setTheme] = useState(() => {
-    const saved = localStorage.getItem('theme')
-    if (saved) return saved
+    const savedTheme = localStorage.getItem('theme')
+    if (savedTheme) return savedTheme
     if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
       return 'dark'
     }
@@ -621,6 +754,7 @@ function App() {
   const [formErrors, setFormErrors] = useState({})
   const [submitting, setSubmitting] = useState(false)
   const [uploadProgress, setUploadProgress] = useState({})
+  const [lookingUp, setLookingUp] = useState(false)
 
   /* ---------- Refs ---------- */
   const searchRef = useRef(null)
@@ -631,9 +765,9 @@ function App() {
 
   const API_URL = import.meta.env.VITE_API_URL
 
-  /* ========================================================================
+  /* ============================================================================
      THEME MANAGEMENT
-  ======================================================================== */
+  ============================================================================ */
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -641,22 +775,22 @@ function App() {
   }, [theme])
 
   const toggleTheme = useCallback(() => {
-    setTheme((prev) => (prev === 'light' ? 'dark' : 'light'))
+    setTheme((previous) => (previous === 'light' ? 'dark' : 'light'))
   }, [])
 
   useEffect(() => {
     localStorage.setItem('viewMode', viewMode)
   }, [viewMode])
 
-  /* ========================================================================
+  /* ============================================================================
      AUTHENTICATION
-  ======================================================================== */
+  ============================================================================ */
 
   useEffect(() => {
-    let mounted = true
+    let isMounted = true
 
     supabase.auth.getSession().then(({ data: { session } }) => {
-      if (mounted) {
+      if (isMounted) {
         setSession(session)
         setLoadingAuth(false)
       }
@@ -665,13 +799,13 @@ function App() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (mounted) {
+      if (isMounted) {
         setSession(session)
       }
     })
 
     return () => {
-      mounted = false
+      isMounted = false
       subscription.unsubscribe()
     }
   }, [])
@@ -687,9 +821,9 @@ function App() {
       setShowForm(false)
       setNotifications([])
       setMainView('inventory')
-    } catch (err) {
-      console.error('Logout error:', err)
-      showMessage('error', 'Failed to log out')
+    } catch (error) {
+      console.error('Logout error:', error)
+      showMessage('error', 'Failed to log out properly')
     }
   }
 
@@ -699,34 +833,38 @@ function App() {
         data: { session },
       } = await supabase.auth.getSession()
       return session?.access_token || null
-    } catch (err) {
-      console.error('Error getting access token:', err)
+    } catch (error) {
+      console.error('Error retrieving access token:', error)
       return null
     }
   }, [])
 
-  /* ========================================================================
-     TOAST MESSAGES
-  ======================================================================== */
+  /* ============================================================================
+     TOAST / MESSAGE SYSTEM
+  ============================================================================ */
 
   const showMessage = useCallback((type, text) => {
     if (toastTimeout.current) {
       clearTimeout(toastTimeout.current)
     }
-    setMessage({ type, text, id: Date.now() })
+    setMessage({
+      type,
+      text,
+      id: Date.now(),
+    })
     toastTimeout.current = setTimeout(() => {
       setMessage(null)
-    }, 4000)
+    }, 4200)
   }, [])
 
-  /* ========================================================================
+  /* ============================================================================
      NOTIFICATION SYSTEM
-  ======================================================================== */
+  ============================================================================ */
 
   const createNotification = (type, title, messageText, chemId = null) => {
-    const id = `${type}-${chemId || Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+    const uniqueId = `${type}-${chemId || Date.now()}-${Math.random().toString(36).slice(2, 9)}`
     return {
-      id,
+      id: uniqueId,
       type,
       title,
       message: messageText,
@@ -737,79 +875,89 @@ function App() {
   }
 
   const checkAndNotify = useCallback(
-    (chems) => {
-      if (!notificationsEnabled || !Array.isArray(chems) || chems.length === 0) return
+    (chemicalList) => {
+      if (!notificationsEnabled || !Array.isArray(chemicalList) || chemicalList.length === 0) {
+        return
+      }
 
-      const newNotifs = []
+      const newlyCreatedNotifications = []
 
-      chems.forEach((c) => {
-        if (isExpired(c)) {
-          newNotifs.push(
+      chemicalList.forEach((chemical) => {
+        if (isExpired(chemical)) {
+          newlyCreatedNotifications.push(
             createNotification(
               'expired',
               'Chemical Expired',
-              `"${c.name}" expired on ${formatDate(c.expiry_date)}`,
-              c.id
+              `"${chemical.name}" expired on ${formatDate(chemical.expiry_date)}`,
+              chemical.id
             )
           )
-        } else if (isExpiringSoon(c)) {
-          const days = daysUntil(c.expiry_date)
-          newNotifs.push(
+        } else if (isExpiringSoon(chemical)) {
+          const remainingDays = daysUntil(chemical.expiry_date)
+          newlyCreatedNotifications.push(
             createNotification(
               'soon',
               'Expiring Soon',
-              `"${c.name}" expires in ${days} day${days !== 1 ? 's' : ''}`,
-              c.id
+              `"${chemical.name}" expires in ${remainingDays} day${remainingDays !== 1 ? 's' : ''}`,
+              chemical.id
             )
           )
         }
 
-        if (isLow(c)) {
-          newNotifs.push(
+        if (isLow(chemical)) {
+          newlyCreatedNotifications.push(
             createNotification(
               'low',
               'Low Stock Alert',
-              `"${c.name}" is running low (${c.quantity} ${c.unit} remaining)`,
-              c.id
+              `"${chemical.name}" is running low (${chemical.quantity} ${chemical.unit} remaining)`,
+              chemical.id
             )
           )
         }
       })
 
-      setNotifications((prev) => {
-        const existingKeys = new Set(prev.map((n) => `${n.type}-${n.chemId}`))
-        const uniqueNew = newNotifs.filter((n) => !existingKeys.has(`${n.type}-${n.chemId}`))
+      setNotifications((previousNotifications) => {
+        const existingKeys = new Set(
+          previousNotifications.map((n) => `${n.type}-${n.chemId}`)
+        )
 
-        if (uniqueNew.length === 0) return prev
+        const uniqueNewNotifications = newlyCreatedNotifications.filter(
+          (n) => !existingKeys.has(`${n.type}-${n.chemId}`)
+        )
 
-        // Browser notifications
+        if (uniqueNewNotifications.length === 0) {
+          return previousNotifications
+        }
+
+        // Attempt to show browser notifications
         if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-          uniqueNew.forEach((n) => {
+          uniqueNewNotifications.forEach((notification) => {
             try {
-              new Notification(n.title, {
-                body: n.message,
-                tag: n.id,
+              new Notification(notification.title, {
+                body: notification.message,
+                tag: notification.id,
                 requireInteraction: false,
               })
             } catch (err) {
-              // Some browsers may block this
+              // Some browsers may block this silently
             }
           })
         }
 
-        return [...uniqueNew, ...prev].slice(0, 60)
+        return [...uniqueNewNotifications, ...previousNotifications].slice(0, 60)
       })
     },
     [notificationsEnabled]
   )
 
+  // Run notification check whenever the chemicals list changes
   useEffect(() => {
     if (chemicals.length > 0) {
       checkAndNotify(chemicals)
     }
   }, [chemicals, checkAndNotify])
 
-  // Periodic re-check every 5 minutes
+  // Also re-check every 5 minutes
   useEffect(() => {
     const intervalId = setInterval(() => {
       if (chemicals.length > 0) {
@@ -838,29 +986,29 @@ function App() {
       } else {
         showMessage('error', 'Notification permission was denied')
       }
-    } catch (err) {
+    } catch (error) {
       showMessage('error', 'Could not request notification permission')
     }
   }
 
   const toggleNotifications = () => {
-    const next = !notificationsEnabled
-    setNotificationsEnabled(next)
-    localStorage.setItem('notificationsEnabled', String(next))
+    const nextValue = !notificationsEnabled
+    setNotificationsEnabled(nextValue)
+    localStorage.setItem('notificationsEnabled', String(nextValue))
 
-    if (next && notifPermission !== 'granted') {
+    if (nextValue && notifPermission !== 'granted') {
       requestNotificationPermission()
     }
   }
 
-  const markAsRead = (id) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+  const markAsRead = (notificationId) => {
+    setNotifications((previous) =>
+      previous.map((n) => (n.id === notificationId ? { ...n, read: true } : n))
     )
   }
 
   const markAllRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
+    setNotifications((previous) => previous.map((n) => ({ ...n, read: true })))
   }
 
   const clearNotifications = () => {
@@ -883,21 +1031,28 @@ function App() {
     }
 
     document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
   }, [])
 
-  /* ========================================================================
-     API LAYER
-  ======================================================================== */
+  /* ============================================================================
+     API LAYER - FETCHING DATA
+  ============================================================================ */
 
   const fetchChemicals = useCallback(
     async (silent = false) => {
       try {
-        if (!silent) setLoading(true)
-        else setRefreshing(true)
+        if (!silent) {
+          setLoading(true)
+        } else {
+          setRefreshing(true)
+        }
 
         const token = await getAccessToken()
-        if (!token) throw new Error('No access token')
+        if (!token) {
+          throw new Error('No access token available')
+        }
 
         const response = await fetch(`${API_URL}/chemicals`, {
           headers: {
@@ -906,13 +1061,13 @@ function App() {
         })
 
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`)
+          throw new Error(`HTTP error ${response.status}`)
         }
 
         const data = await response.json()
         setChemicals(Array.isArray(data) ? data : [])
-      } catch (err) {
-        console.error('Failed to fetch chemicals:', err)
+      } catch (error) {
+        console.error('Failed to fetch chemicals:', error)
         showMessage('error', 'Could not load chemicals. Please check your connection.')
       } finally {
         setLoading(false)
@@ -933,16 +1088,19 @@ function App() {
         },
       })
 
-      if (!response.ok) throw new Error('Failed to load transactions')
+      if (!response.ok) {
+        throw new Error('Failed to load transactions')
+      }
 
       const data = await response.json()
       setTransactions(Array.isArray(data) ? data : [])
-    } catch (err) {
-      // Backend may not have the endpoint yet – fail silently
-      console.warn('Could not load transactions:', err.message)
+    } catch (error) {
+      // Backend may not have the transactions endpoint yet – fail silently
+      console.warn('Could not load transactions:', error.message)
     }
   }, [API_URL, getAccessToken])
 
+  // Load data when user session becomes available
   useEffect(() => {
     if (session) {
       fetchChemicals()
