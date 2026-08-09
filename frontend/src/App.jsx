@@ -31,6 +31,24 @@ import './App.css'
    CONSTANTS
 ============================================================================ */
 
+// ====================== CHEMICAL CLASSES ======================
+const CHEMICAL_CLASSES = [
+  { id: 'acid', label: 'Acid (Strong/Weak)', color: '#ef4444' },
+  { id: 'base', label: 'Base / Alkali', color: '#3b82f6' },
+  { id: 'oxidizer', label: 'Oxidizer', color: '#eab308' },
+  { id: 'flammable_solvent', label: 'Flammable Solvent', color: '#f97316' },
+  { id: 'water_reactive', label: 'Water-Reactive', color: '#8b5cf6' },
+  { id: 'toxic', label: 'Toxic / Poison', color: '#64748b' },
+  { id: 'cyanide', label: 'Cyanide', color: '#1e293b' },
+  { id: 'sulfide', label: 'Sulfide', color: '#78716c' },
+  { id: 'peroxide_former', label: 'Peroxide Former', color: '#ec4899' },
+  { id: 'explosive', label: 'Explosive / Sensitive', color: '#dc2626' },
+  { id: 'halogen', label: 'Halogen', color: '#06b6d4' },
+  { id: 'organic', label: 'Organic Material', color: '#22c55e' },
+  { id: 'compressed_gas', label: 'Compressed Gas', color: '#6366f1' },
+]
+
+// ====================== EXPANDED GHS HAZARDS ======================
 const HAZARD_OPTIONS = [
   { id: 'explosive', label: 'Explosive', emoji: '💥', color: '#ef4444' },
   { id: 'flammable', label: 'Flammable', emoji: '🔥', color: '#f97316' },
@@ -41,39 +59,32 @@ const HAZARD_OPTIONS = [
   { id: 'harmful', label: 'Harmful / Irritant', emoji: '⚠️', color: '#f59e0b' },
   { id: 'health', label: 'Health Hazard', emoji: '🫁', color: '#ec4899' },
   { id: 'environmental', label: 'Environmental', emoji: '🌍', color: '#22c55e' },
+  // Extra useful ones
+  { id: 'acute_toxicity', label: 'Acute Toxicity', emoji: '☠️', color: '#7f1d1d' },
+  { id: 'aspiration', label: 'Aspiration Hazard', emoji: '🫁', color: '#be185d' },
+  { id: 'carcinogen', label: 'Carcinogen', emoji: '☢️', color: '#9f1239' },
 ]
 
-const UNITS = ['g', 'mg', 'kg', 'ml', 'L', 'µl', 'mol', 'units']
+// ====================== CLASS COMPATIBILITY MATRIX ======================
+const CLASS_COMPATIBILITY_RULES = [
+  // High risk
+  { a: 'acid', b: 'base', risk: 'High', reason: 'Acids and bases react violently and generate heat' },
+  { a: 'acid', b: 'cyanide', risk: 'High', reason: 'Acids + cyanides release highly toxic hydrogen cyanide gas' },
+  { a: 'acid', b: 'sulfide', risk: 'High', reason: 'Acids + sulfides release toxic hydrogen sulfide gas' },
+  { a: 'acid', b: 'water_reactive', risk: 'High', reason: 'Many water-reactive chemicals react violently with acids' },
+  { a: 'oxidizer', b: 'flammable_solvent', risk: 'High', reason: 'Oxidizers + flammable solvents can cause fire or explosion' },
+  { a: 'oxidizer', b: 'organic', risk: 'High', reason: 'Oxidizers + organic materials are a serious fire/explosion risk' },
+  { a: 'oxidizer', b: 'water_reactive', risk: 'High', reason: 'Dangerous combination – high reactivity' },
+  { a: 'water_reactive', b: 'flammable_solvent', risk: 'High', reason: 'Water-reactive chemicals can ignite flammable solvents' },
+  { a: 'peroxide_former', b: 'oxidizer', risk: 'High', reason: 'Peroxide formers become extremely dangerous with oxidizers' },
+  { a: 'explosive', b: 'oxidizer', risk: 'High', reason: 'Oxidizers can sensitize or initiate explosives' },
+  { a: 'halogen', b: 'flammable_solvent', risk: 'High', reason: 'Halogens react dangerously with many organic solvents' },
 
-const SORT_OPTIONS = [
-  { value: 'name', label: 'Name (A–Z)' },
-  { value: 'name-desc', label: 'Name (Z–A)' },
-  { value: 'quantity', label: 'Quantity (High → Low)' },
-  { value: 'quantity-asc', label: 'Quantity (Low → High)' },
-  { value: 'expiry', label: 'Expiry (Soonest first)' },
-  { value: 'expiry-desc', label: 'Expiry (Latest first)' },
-  { value: 'location', label: 'Location' },
-  { value: 'supplier', label: 'Supplier' },
-  { value: 'updated', label: 'Recently Updated' },
-]
-
-const FILTER_PRESETS = [
-  { id: 'all', label: 'All Chemicals', icon: '📦' },
-  { id: 'low', label: 'Low Stock', icon: '📉' },
-  { id: 'soon', label: 'Expiring Soon', icon: '⏳' },
-  { id: 'expired', label: 'Expired', icon: '🚫' },
-  { id: 'no-sds', label: 'Missing SDS', icon: '📄' },
-]
-
-const COMPATIBILITY_RULES = [
-  { a: 'flammable', b: 'oxidizing', risk: 'High', reason: 'Flammable materials mixed with oxidizers can cause rapid combustion or explosion.' },
-  { a: 'flammable', b: 'explosive', risk: 'High', reason: 'Extremely dangerous combination – high risk of fire or detonation.' },
-  { a: 'corrosive', b: 'flammable', risk: 'Medium', reason: 'Corrosive substances can damage containers holding flammable materials.' },
-  { a: 'toxic', b: 'flammable', risk: 'Medium', reason: 'In case of fire, toxic fumes may be released more readily.' },
-  { a: 'oxidizing', b: 'corrosive', risk: 'Medium', reason: 'Increased reactivity and potential for violent reactions.' },
-  { a: 'health', b: 'toxic', risk: 'Medium', reason: 'Combined health hazards increase exposure risk.' },
-  { a: 'gas', b: 'flammable', risk: 'High', reason: 'Compressed flammable gases pose serious fire and explosion hazards.' },
-  { a: 'explosive', b: 'oxidizing', risk: 'High', reason: 'Oxidizers can sensitize or initiate explosive materials.' },
+  // Medium risk
+  { a: 'acid', b: 'flammable_solvent', risk: 'Medium', reason: 'Acids can damage containers and increase fire risk' },
+  { a: 'base', b: 'flammable_solvent', risk: 'Medium', reason: 'Bases can degrade containers of flammable solvents' },
+  { a: 'toxic', b: 'flammable_solvent', risk: 'Medium', reason: 'Fire involving toxics creates additional hazards' },
+  { a: 'compressed_gas', b: 'flammable_solvent', risk: 'Medium', reason: 'Compressed gases near flammables increase risk' },
 ]
 
 const EMPTY_FORM = {
@@ -89,7 +100,188 @@ const EMPTY_FORM = {
   hazard_symbols: [],
   batch_lot: '',
   supplier: '',
+  chemical_classes: [],          // ← NEW
 }
+
+// Simple auto-classification based on name + GHS symbols
+const autoClassifyChemical = (name = '', hazardSymbols = []) => {
+  const classes = new Set()
+  const lower = name.toLowerCase()
+
+  // From name keywords
+  if (lower.includes('acid') || lower.includes('hcl') || lower.includes('h2so4') || lower.includes('hno3')) {
+    classes.add('acid')
+  }
+  if (lower.includes('hydroxide') || lower.includes('naoh') || lower.includes('koh') || lower.includes('ammonia')) {
+    classes.add('base')
+  }
+  if (lower.includes('peroxide') || lower.includes('nitrate') || lower.includes('permanganate') || lower.includes('chromate')) {
+    classes.add('oxidizer')
+  }
+  if (lower.includes('ether') || lower.includes('thf') || lower.includes('dioxane')) {
+    classes.add('peroxide_former')
+    classes.add('flammable_solvent')
+  }
+  if (lower.includes('sodium') || lower.includes('lithium') || lower.includes('potassium') && !lower.includes('hydroxide')) {
+    classes.add('water_reactive')
+  }
+  if (lower.includes('cyanide')) classes.add('cyanide')
+  if (lower.includes('sulfide')) classes.add('sulfide')
+  if (lower.includes('chlorine') || lower.includes('bromine') || lower.includes('iodine')) {
+    classes.add('halogen')
+  }
+
+  // From GHS symbols
+  if (hazardSymbols.includes('flammable')) classes.add('flammable_solvent')
+  if (hazardSymbols.includes('oxidizing')) classes.add('oxidizer')
+  if (hazardSymbols.includes('corrosive')) {
+    // could be acid or base – leave for manual
+  }
+  if (hazardSymbols.includes('explosive')) classes.add('explosive')
+  if (hazardSymbols.includes('gas')) classes.add('compressed_gas')
+  if (hazardSymbols.includes('toxic') || hazardSymbols.includes('acute_toxicity')) {
+    classes.add('toxic')
+  }
+
+  return Array.from(classes)
+}
+
+{/* Chemical Classes */}
+<div className="hazard-selector">
+  <label>Chemical Classes (for compatibility checking)</label>
+  <div className="hazard-grid">
+    {CHEMICAL_CLASSES.map((cls) => {
+      const active = formData.chemical_classes?.includes(cls.id)
+      return (
+        <button
+          type="button"
+          key={cls.id}
+          className={`hazard-chip ${active ? 'active' : ''}`}
+          onClick={() => {
+            setFormData(prev => {
+              const current = prev.chemical_classes || []
+              if (current.includes(cls.id)) {
+                return { ...prev, chemical_classes: current.filter(c => c !== cls.id) }
+              }
+              return { ...prev, chemical_classes: [...current, cls.id] }
+            })
+          }}
+          style={{
+            borderColor: active ? cls.color : undefined,
+            background: active ? `${cls.color}22` : undefined,
+          }}
+        >
+          {cls.label}
+        </button>
+      )
+    })}
+  </div>
+</div>
+
+// Auto-classify when name or hazard symbols change
+useEffect(() => {
+  if (!showForm) return
+
+  const suggested = autoClassifyChemical(formData.name, formData.hazard_symbols)
+  if (suggested.length > 0) {
+    setFormData(prev => {
+      // Only add missing ones, don’t remove user choices
+      const current = new Set(prev.chemical_classes || [])
+      suggested.forEach(c => current.add(c))
+      return { ...prev, chemical_classes: Array.from(current) }
+    })
+  }
+}, [formData.name, formData.hazard_symbols, showForm])
+
+const lookupPubChem = async (casOrName) => {
+  if (!casOrName || casOrName.length < 3) return null
+
+  try {
+    // First try to get CID
+    const searchUrl = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${encodeURIComponent(casOrName)}/cids/JSON`
+    const searchRes = await fetch(searchUrl)
+    if (!searchRes.ok) return null
+
+    const searchData = await searchRes.json()
+    const cid = searchData?.IdentifierList?.CID?.[0]
+    if (!cid) return null
+
+    // Get properties
+    const propUrl = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/property/MolecularFormula,IUPACName/JSON`
+    const propRes = await fetch(propUrl)
+    if (!propRes.ok) return null
+
+    const propData = await propRes.json()
+    const props = propData?.PropertyTable?.Properties?.[0]
+
+    return {
+      molecular_formula: props?.MolecularFormula || null,
+      iupac_name: props?.IUPACName || null,
+    }
+  } catch (err) {
+    console.warn('PubChem lookup failed', err)
+    return null
+  }
+}
+
+const compatibilityIssues = useMemo(() => {
+  const issues = []
+  const byLocation = {}
+
+  chemicals.forEach((c) => {
+    const loc = (c.location || 'Unassigned').trim()
+    if (!byLocation[loc]) byLocation[loc] = []
+    byLocation[loc].push(c)
+  })
+
+  Object.entries(byLocation).forEach(([location, chemsInLoc]) => {
+    for (let i = 0; i < chemsInLoc.length; i++) {
+      for (let j = i + 1; j < chemsInLoc.length; j++) {
+        const chemA = chemsInLoc[i]
+        const chemB = chemsInLoc[j]
+
+        const classesA = chemA.chemical_classes || []
+        const classesB = chemB.chemical_classes || []
+        const symbolsA = chemA.hazard_symbols || []
+        const symbolsB = chemB.hazard_symbols || []
+
+        // 1. Primary check: Chemical Classes
+        CLASS_COMPATIBILITY_RULES.forEach((rule) => {
+          const match =
+            (classesA.includes(rule.a) && classesB.includes(rule.b)) ||
+            (classesA.includes(rule.b) && classesB.includes(rule.a))
+
+          if (match) {
+            issues.push({
+              location,
+              chemA: chemA.name,
+              chemB: chemB.name,
+              risk: rule.risk,
+              reason: rule.reason,
+              source: 'class',
+            })
+          }
+        })
+
+        // 2. Secondary check: GHS symbols (fallback)
+        // (you can keep the old GHS rules here if you want)
+      }
+    }
+  })
+
+  // Remove duplicates
+  const unique = []
+  const seen = new Set()
+  issues.forEach((issue) => {
+    const key = `${issue.location}-${issue.chemA}-${issue.chemB}-${issue.reason}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      unique.push(issue)
+    }
+  })
+
+  return unique
+}, [chemicals])
 
 /* ============================================================================
    HELPER FUNCTIONS
