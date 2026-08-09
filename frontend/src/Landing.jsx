@@ -1,15 +1,15 @@
 import './App.css'
 // Import pictograms – adjust paths if your folder structure is different
-import ghs01 from './assets/pictograms/exploding_bomb.gif'
-import ghs02 from './assets/pictograms/flame.gif'
-import ghs03 from './assets/pictograms/flame_over_circle.gif'
-import ghs04 from './assets/pictograms/gas_cylinder.gif'
-import ghs05 from './assets/pictograms/corrosion.gif'
-import ghs06 from './assets/pictograms/skull_and_crossbones.gif'
-import ghs07 from './assets/pictograms/exclamation_mark.gif'
-import ghs08 from './assets/pictograms/health_hazard.gif'
-import ghs09 from './assets/pictograms/GHS-pictogram-pollu.svg.webp'
-import biohazard from './assets/pictograms/biohazardous_infectious_materials.gif'
+import ghs01 from './assets/Pictograms/exploding_bomb.gif'
+import ghs02 from './assets/Pictograms/flame.gif'
+import ghs03 from './assets/Pictograms/flame_over_circle.gif'
+import ghs04 from './assets/Pictograms/gas_cylinder.gif'
+import ghs05 from './assets/Pictograms/corrosion.gif'
+import ghs06 from './assets/Pictograms/skull_and_crossbones.gif'
+import ghs07 from './assets/Pictograms/exclamation_mark.gif'
+import ghs08 from './assets/Pictograms/health_hazard.gif'
+import ghs09 from './assets/Pictograms/GHS-pictogram-pollu.svg.webp'
+import biohazard from './assets/Pictograms/biohazardous_infectious_materials.gif'
 
 function Landing({ onGetStarted }) {
   return (
