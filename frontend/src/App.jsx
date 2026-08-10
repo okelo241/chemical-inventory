@@ -2667,32 +2667,6 @@ function App() {
               </div>
             </div>
           )}
-          {/* QR CODE DISPLAY MODAL */}
-          {showQrModal && (
-            <div className="modal-overlay" onClick={() => setShowQrModal(false)}>
-              <div className="modal" style={{ maxWidth: 320, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
-                <div className="modal-header">
-                  <h3>{showQrModal.name}</h3>
-                  <button className="icon-btn" onClick={() => setShowQrModal(null)}>✕</button>
-                </div>
-                {showQrModal.barcode ? (
-                  <>
-                    <QRCode value={showQrModal.barcode} size={200} />
-                    <p style={{ marginTop: 12, fontFamily: 'monospace', fontSize: '0.9rem', wordBreak: 'break-all' }}>
-                      {showQrModal.barcode}
-                    </p>
-                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: 8 }}>
-                      Print this and stick it on the bottle.
-                    </p>
-                  </>
-                ) : (
-                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: 8 }}>
-                    No barcode/QR value available for this chemical.
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
 
           {/* ========== USAGE MODAL ========== */}
           {showUsageModal && usageChem && (
@@ -3135,9 +3109,8 @@ function App() {
           </main>
         </>
       )}
+
     
-
-
       {/* ========== USAGE HISTORY DRAWER ========== */}
       {showHistory && (
         <div
@@ -3385,6 +3358,32 @@ function App() {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+      {/* QR CODE DISPLAY MODAL */}
+      {showQrModal && (
+        <div className="modal-overlay" onClick={() => setShowQrModal(false)}>
+          <div className="modal" style={{ maxWidth: 320, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>{showQrModal.name}</h3>
+              <button className="icon-btn" onClick={() => setShowQrModal(null)}>✕</button>
+            </div>
+            {showQrModal.barcode ? (
+              <>
+                <QRCode value={showQrModal.barcode} size={200} />
+                <p style={{ marginTop: 12, fontFamily: 'monospace', fontSize: '0.9rem', wordBreak: 'break-all' }}>
+                   {showQrModal.barcode}
+                </p>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: 8 }}>
+                  Print this and stick it on the bottle.
+                </p>
+              </>
+            ) : (
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: 8 }}>
+                No barcode/QR value available for this chemical.
+              </p>
+            )}
           </div>
         </div>
       )}
