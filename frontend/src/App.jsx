@@ -39,7 +39,16 @@ import './App.css'
 /* ============================================================================
    SECTION 1: CONSTANTS
 ============================================================================ */
-
+import pictogramExplosive from './assets/Pictograms/exploding_bomb.gif'
+import pictogramFlammable from './assets/Pictograms/flame.gif'
+import pictogramOxidizing from './assets/Pictograms/flame_over_circle.gif'
+import pictogramGas from './assets/Pictograms/gas_cylinder.gif'
+import pictogramCorrosive from './assets/Pictograms/corrosion.gif'
+import pictogramToxic from './assets/Pictograms/skull_and_crossbones.gif'
+import pictogramHarmful from './assets/Pictograms/exclamation_mark.gif'
+import pictogramHealth from './assets/Pictograms/health_hazard.gif'
+import pictogramEnvironmental from './assets/Pictograms/GHS-pictogram-pollu.svg.webp'
+import pictogramBiohazard from './assets/Pictograms/biohazardous_infectious_materials.gif'
 /**
  * Chemical Classes used for compatibility checking.
  * These are the primary way we determine if two chemicals
@@ -67,18 +76,19 @@ const CHEMICAL_CLASSES = [
  * for auto-classification.
  */
 const HAZARD_OPTIONS = [
-  { id: 'explosive', label: 'Explosive', emoji: '💥', color: '#ef4444' },
-  { id: 'flammable', label: 'Flammable', emoji: '🔥', color: '#f97316' },
-  { id: 'oxidizing', label: 'Oxidizing', emoji: '⚗️', color: '#eab308' },
-  { id: 'gas', label: 'Compressed Gas', emoji: '🧴', color: '#3b82f6' },
-  { id: 'corrosive', label: 'Corrosive', emoji: '🧪', color: '#a855f7' },
-  { id: 'toxic', label: 'Toxic', emoji: '☠️', color: '#64748b' },
-  { id: 'harmful', label: 'Harmful / Irritant', emoji: '⚠️', color: '#f59e0b' },
-  { id: 'health', label: 'Health Hazard', emoji: '🫁', color: '#ec4899' },
-  { id: 'environmental', label: 'Environmental', emoji: '🌍', color: '#22c55e' },
-  { id: 'acute_toxicity', label: 'Acute Toxicity', emoji: '☠️', color: '#7f1d1d' },
-  { id: 'carcinogen', label: 'Carcinogen', emoji: '☢️', color: '#9f1239' },
-  { id: 'aspiration', label: 'Aspiration Hazard', emoji: '🫁', color: '#be185d' },
+  { id: 'explosive', label: 'Explosive', emoji: '💥', color: '#ef4444', icon: pictogramExplosive },
+  { id: 'flammable', label: 'Flammable', emoji: '🔥', color: '#f97316', icon: pictogramFlammable },
+  { id: 'oxidizing', label: 'Oxidizing', emoji: '⚗️', color: '#eab308', icon: pictogramOxidizing },
+  { id: 'gas', label: 'Compressed Gas', emoji: '🧴', color: '#3b82f6', icon: pictogramGas },
+  { id: 'corrosive', label: 'Corrosive', emoji: '🧪', color: '#a855f7', icon: pictogramCorrosive },
+  { id: 'toxic', label: 'Toxic', emoji: '☠️', color: '#64748b', icon: pictogramToxic },
+  { id: 'harmful', label: 'Harmful / Irritant', emoji: '⚠️', color: '#f59e0b', icon: pictogramHarmful },
+  { id: 'health', label: 'Health Hazard', emoji: '🫁', color: '#ec4899', icon: pictogramHealth },
+  { id: 'environmental', label: 'Environmental', emoji: '🌍', color: '#22c55e', icon: pictogramEnvironmental },
+  { id: 'acute_toxicity', label: 'Acute Toxicity', emoji: '☠️', color: '#7f1d1d', icon: pictogramToxic },
+  { id: 'carcinogen', label: 'Carcinogen', emoji: '☢️', color: '#9f1239', icon: pictogramHealth },
+  { id: 'aspiration', label: 'Aspiration Hazard', emoji: '🫁', color: '#be185d', icon: pictogramHealth },
+  { id: 'biohazard', label: 'Biohazard', emoji: '☣️', color: '#166534', icon: pictogramBiohazard },
 ]
 
 /**
@@ -1610,6 +1620,22 @@ function App() {
     setEditingId(null)
     setShowForm(false)
   }
+  const HazardIcon = ({ hazard, size = 24 }) => {
+    if (!hazard?.icon) return <span>{hazard?.emoji || '⚠️'}</span>
+    return (
+      <img
+        src={hazard.icon}
+        alt={hazard.label}
+        title={hazard.label}
+        style={{
+          width: size,
+          height: size,
+          objectFit: 'contain',
+          verticalAlign: 'middle',
+        }}
+      />
+    )
+  }
 
   const handleEdit = (chem) => {
     setFormData({
@@ -2576,7 +2602,7 @@ function App() {
                               background: isActive ? `${h.color}22` : undefined,
                             }}
                           >
-                            <span className="hazard-emoji">{h.emoji}</span>
+                            <HazardIcon hazard={h} size={22} />
                             <span>{h.label}</span>
                           </button>
                         )
@@ -2784,6 +2810,21 @@ function App() {
             ) : viewMode === 'cards' ? (
               /* ---- CARD VIEW ---- */
               <div className="cards-grid">
+                {(chem.hazard_symbols?.length > 0 || chem.hazard_notes) && (
+                  <div className="card-hazards">
+                    {(chem.hazard_symbols || []).map((id) => {
+                      const h = HAZARD_OPTIONS.find((x) => x.id === id)
+                      return h ? (
+                        <span key={id} title={h.label} className="hazard-emoji">
+                          {h.emoji}
+                        </span>
+                      ) : null
+                  })}
+                  {chem.hazard_notes && (
+                    <span className="hazard-note">{chem.hazard_notes}</span>
+                 )}
+              </div>
+            )}
                 {filtered.map((chem) => {
                   const expired = isExpired(chem)
                   const low = isLow(chem)
@@ -2865,21 +2906,14 @@ function App() {
                         )}
                       </div>
 
-                      {(chem.hazard_symbols?.length > 0 || chem.hazard_notes) && (
-                        <div className="card-hazards">
-                          {(chem.hazard_symbols || []).map((id) => {
-                            const h = HAZARD_OPTIONS.find((x) => x.id === id)
-                            return h ? (
-                              <span key={id} title={h.label} className="hazard-emoji">
-                                {h.emoji}
-                              </span>
-                            ) : null
-                          })}
-                          {chem.hazard_notes && (
-                            <span className="hazard-note">{chem.hazard_notes}</span>
-                          )}
-                        </div>
-                      )}
+                      {(chem.hazard_symbols || []).map((id) => {
+                        const h = HAZARD_OPTIONS.find((x) => x.id === id)
+                        return h ? (
+                          <span key={id} title={h.label} style={{ display: 'inline-flex', marginRight: 4 }}>
+                            <HazardIcon hazard={h} size={22} />
+                          </span>
+                        ) : null
+                      })}
 
                       <div className="card-sds">
                         {uploadProgress[chem.id] !== undefined ? (
@@ -3024,12 +3058,12 @@ function App() {
                               {(chem.hazard_symbols || []).map((id) => {
                                 const h = HAZARD_OPTIONS.find((x) => x.id === id)
                                 return h ? (
-                                  <span key={id} title={h.label}>
-                                    {h.emoji}
+                                  <span key={id} title={h.label} style={{ display: 'inline-flex', marginRight: 3 }}>
+                                    <HazardIcon hazard={h} size={20} />
                                   </span>
                                 ) : null
                               })}
-                            </div>
+                              </div>
                           </td>
                           <td>
                             <span className={getStatusBadgeClass(chem)}>{getStatus(chem)}</span>
@@ -3336,7 +3370,7 @@ function App() {
               {HAZARD_OPTIONS.map((h) => (
                 <div key={h.id} className="legend-item">
                   <span className="legend-emoji" style={{ background: `${h.color}22` }}>
-                    {h.emoji}
+                    <HazardIcon hazard={h} size={28} />
                   </span>
                   <div>
                     <strong>{h.label}</strong>
