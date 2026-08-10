@@ -330,74 +330,74 @@ const getStatus = (chemical) => {
 /**
  * Returns the CSS class used for status badges.
  */
-const getStatusBadgeClass = (chemical) => {
-  if (isExpired(chemical)) return 'badge badge-red'
-  if (isLow(chemical)) return 'badge badge-orange'
-  if (isExpiringSoon(chemical)) return 'badge badge-yellow'
-  return 'badge badge-green'
-}
-
-const generateBarcodeValue = () => {
-  return `CHEM-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
-}
-
-const handleGenerateBarcode = () => {
-  if (!formData.barcode) {
-    setFormData(prev => ({ ...prev, barcode: generateBarcodeValue() }))
-    showMessage('success', 'Barcode generated')
+  const getStatusBadgeClass = (chemical) => {
+    if (isExpired(chemical)) return 'badge badge-red'
+    if (isLow(chemical)) return 'badge badge-orange'
+    if (isExpiringSoon(chemical)) return 'badge badge-yellow'
+    return 'badge badge-green'
   }
+
+  const generateBarcodeValue = () => {
+    return `CHEM-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
+  }
+
+  const handleGenerateBarcode = () => {
+    if (!formData.barcode) {
+      setFormData(prev => ({ ...prev, barcode: generateBarcodeValue() }))
+      showMessage('success', 'Barcode generated')
+    }
 }
 
 
 
 /* ===== BARCODE / QR FUNCTIONS ===== */
-const startScanner = async () => {
-  setShowScanner(true)
-  setScanResult(null)
+  const startScanner = async () => {
+    setShowScanner(true)
+    setScanResult(null)
 
-  setTimeout(async () => {
-    try {
-      const html5QrCode = new Html5Qrcode('qr-reader')
-      html5QrCodeRef.current = html5QrCode
+    setTimeout(async () => {
+      try {
+        const html5QrCode = new Html5Qrcode('qr-reader')
+        html5QrCodeRef.current = html5QrCode
 
-      await html5QrCode.start(
-        { facingMode: 'environment' },
-        { fps: 10, qrbox: { width: 250, height: 250 } },
-        (decodedText) => {
-          setScanResult(decodedText)
-          html5QrCode.stop().then(() => {
-            html5QrCodeRef.current = null
-          }).catch(() => {})
+        await html5QrCode.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: { width: 250, height: 250 } },
+          (decodedText) => {
+            setScanResult(decodedText)
+            html5QrCode.stop().then(() => {
+              html5QrCodeRef.current = null
+            }).catch(() => {})
 
-          const match = chemicals.find(c => c.barcode === decodedText)
-          if (match) {
-            setSearch(match.name)
-            setFilter('all')
-            setMainView('inventory')
-            showMessage('success', `Found: ${match.name}`)
-            setShowScanner(false)
-          } else {
-            showMessage('error', `No chemical found with code: ${decodedText}`)
-          }
-        },
-        () => {} // ignore scan errors
-      )
-    } catch (err) {
-      showMessage('error', 'Camera access denied or not available')
-      setShowScanner(false)
+            const match = chemicals.find(c => c.barcode === decodedText)
+            if (match) {
+              setSearch(match.name)
+              setFilter('all')
+              setMainView('inventory')
+              showMessage('success', `Found: ${match.name}`)
+              setShowScanner(false)
+            } else {
+              showMessage('error', `No chemical found with code: ${decodedText}`)
+            }
+          },
+          () => {} // ignore scan errors
+        )
+      } catch (err) {
+        showMessage('error', 'Camera access denied or not available')
+        setShowScanner(false)
+      }
+    }, 300)
+  } 
+
+  const stopScanner = () => {
+    if (html5QrCodeRef.current) {
+      html5QrCodeRef.current.stop().then(() => {
+        html5QrCodeRef.current = null
+      }).catch(() => {})
     }
-  }, 300)
-}
-
-const stopScanner = () => {
-  if (html5QrCodeRef.current) {
-    html5QrCodeRef.current.stop().then(() => {
-      html5QrCodeRef.current = null
-    }).catch(() => {})
+    setShowScanner(false)
+    setScanResult(null)
   }
-  setShowScanner(false)
-  setScanResult(null)
-}
 
 
 
@@ -2542,7 +2542,22 @@ function App() {
                         placeholder="Additional safety or handling notes…"
                       />
                     </div>
+                    <div className="form-group">
+                      <label>Barcode / QR Value</label>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <input
+                          name="barcode"
+                          value={formData.barcode}
+                          placeholder="Scan or generate"
+                          style={{ flex: 1 }}
+                        />
+                        <button type="button" className="btn btn-sm btn-ghost" onClick={handleGenerateBarcode}>
+                          generate
+                        </button>
+                      </div>
+                    </div>
                   </div>
+                    
 
                   {/* GHS Hazard Symbols */}
                   <div className="hazard-selector">
@@ -2605,21 +2620,6 @@ function App() {
               </div>
             </div>
           )}
-          {/* Barcode field */}
-          <div className="form-group">
-            <label>Barcode / QR Value</label>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <input
-                name="barcode"
-                value={formData.barcode}
-                placeholder="Scan or generate"
-                style={{ flex: 1 }}
-              />
-              <button type="button" className="btn btn-sm btn-ghost" onClick={handleGenerateBarcode}>
-                generate
-              </button>
-            </div>
-          </div>
 
           {/* SCANNER MODAL */}
           {showScanner && (
