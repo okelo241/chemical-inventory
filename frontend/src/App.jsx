@@ -4,6 +4,8 @@ import Login from './Login'
 import Landing from './Landing'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import { Html5Qrcode } from 'html5-qrcode'
+import { QRCodeSVG } from 'qrcode.react'
 import './App.css'
 
 /* ============================================================================
@@ -228,6 +230,7 @@ const EMPTY_FORM = {
   batch_lot: '',
   supplier: '',
   chemical_classes: [],
+  barcode: '',
 }
 
 /* ============================================================================
@@ -333,6 +336,70 @@ const getStatusBadgeClass = (chemical) => {
   if (isExpiringSoon(chemical)) return 'badge badge-yellow'
   return 'badge badge-green'
 }
+
+const generateBarcodeValue = () => {
+  return `CHEM-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
+}
+
+const handleGenerateBarcode = () => {
+  if (!formData.barcode) {
+    setFormData(prev => ({ ...prev, barcode: generateBarcodeValue() }))
+    showMessage('success', 'Barcode generated')
+  }
+}
+
+
+
+/* ===== BARCODE / QR FUNCTIONS ===== */
+const startScanner = async () => {
+  setShowScanner(true)
+  setScanResult(null)
+
+  setTimeout(async () => {
+    try {
+      const html5QrCode = new Html5Qrcode('qr-reader')
+      html5QrCodeRef.current = html5QrCode
+
+      await html5QrCode.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        (decodedText) => {
+          setScanResult(decodedText)
+          html5QrCode.stop().then(() => {
+            html5QrCodeRef.current = null
+          }).catch(() => {})
+
+          const match = chemicals.find(c => c.barcode === decodedText)
+          if (match) {
+            setSearch(match.name)
+            setFilter('all')
+            setMainView('inventory')
+            showMessage('success', `Found: ${match.name}`)
+            setShowScanner(false)
+          } else {
+            showMessage('error', `No chemical found with code: ${decodedText}`)
+          }
+        },
+        () => {} // ignore scan errors
+      )
+    } catch (err) {
+      showMessage('error', 'Camera access denied or not available')
+      setShowScanner(false)
+    }
+  }, 300)
+}
+
+const stopScanner = () => {
+  if (html5QrCodeRef.current) {
+    html5QrCodeRef.current.stop().then(() => {
+      html5QrCodeRef.current = null
+    }).catch(() => {})
+  }
+  setShowScanner(false)
+  setScanResult(null)
+}
+
+
 
 /* ============================================================================
    SECTION 3: AUTO-CLASSIFICATION ENGINE
@@ -765,6 +832,12 @@ function App() {
 
   const API_URL = import.meta.env.VITE_API_URL
 
+  // Barcode / QR state
+  const [showScanner, setShowScanner] = useState(false)
+  const [scanResult, setScanResult] = useState(null)
+  const [showQrModal, setShowQrModal] = useState(null) // holds the chemical object
+  const html5QrCodeRef = useRef(null)
+
   /* ============================================================================
      THEME MANAGEMENT
   ============================================================================ */
@@ -1157,6 +1230,7 @@ function App() {
         batch_lot: formData.batch_lot.trim() || null,
         supplier: formData.supplier.trim() || null,
         chemical_classes: formData.chemical_classes.length > 0 ? formData.chemical_classes : null,
+        barcode: formData.barcode.trim() || null,
       }
 
       const url = editingId ? `${API_URL}/chemicals/${editingId}` : `${API_URL}/chemicals`
@@ -1552,6 +1626,7 @@ function App() {
       batch_lot: chem.batch_lot || '',
       supplier: chem.supplier || '',
       chemical_classes: Array.isArray(chem.chemical_classes) ? chem.chemical_classes : [],
+      barcode: chem.barcode || '',
     })
     setEditingId(chem.id)
     setShowForm(true)
@@ -2322,6 +2397,7 @@ function App() {
                   </button>
                 </div>
 
+
                 <form onSubmit={handleSubmit} noValidate>
                   <div className="form-grid">
                     <div className={`form-group ${formErrors.name ? 'error' : ''}`}>
@@ -2526,6 +2602,60 @@ function App() {
                     </button>
                   </div>
                 </form>
+              </div>
+            </div>
+          )}
+          {/* Barcode field */}
+          <div className="form-group">
+            <label>Barcode / QR Value</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                name="barcode"
+                value={formData.barcode}
+                placeholder="Scan or generate"
+                style={{ flex: 1 }}
+              />
+              <button type="button" className="btn btn-sm btn-ghost" onClick={handleGenerateBarcode}>
+                generate
+              </button>
+            </div>
+          </div>
+
+          {/* SCANNER MODAL */}
+          {showScanner && (
+            <div className="modal-overlay" onClick={stopScanner}>
+              <div className="modal" style={{ maxWidth: 400 }} onClick={e => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h3>Scan Barcode / QR Code</h3>
+                  <button className="icon-btn" onClick={stopScanner}>✕</button>
+                </div>
+                <div id="qr-reader" style={{ width: '100%' }}></div>
+                {scanResult && (
+                  <p style={{ marginTop: 12, textAlign: 'center' }}>
+                    Scanned: <strong>{scanResult}</strong>
+                  </p>
+                )}
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: 12, textAlign: 'center' }}>
+                  Point your camera at a barcode or QR code to scan. The value will be automatically filled in the form.
+                </p>
+              </div>
+            </div>
+          )}
+          {/* QR CODE DISPLAY MODAL */}
+          {showQrModal && (
+            <div className="modal-overlay" onClick={() => setShowQrModal(false)}>
+              <div className="modal" style={{ maxWidth: 320, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h3>{showQrModal.name}</h3>
+                  <button className="icon-btn" onClick={() => setShowQrModal(null)}>✕</button>
+                </div>
+                <QRCodeSVG value={showQrModal.barcode} size={200} />
+                <p style={{ marginTop: 12, fontFamily: 'monospace', fontSize: '0.9rem' }}>
+                  {showQrModal.barcode}
+                </p>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  Print this and stick it on the bottle
+                </p>
               </div>
             </div>
           )}
@@ -2809,7 +2939,11 @@ function App() {
                     </article>
                   )
                 })}
+                {chem.barcode && (
+                  <button className="btn-sm" onClick={() => setShowQrModal(chem)}>QR</button>
+                )}
               </div>
+
             ) : (
               /* ---- TABLE VIEW ---- */
               <div className="table-wrapper">
@@ -2954,11 +3088,16 @@ function App() {
                     })}
                   </tbody>
                 </table>
+                  {chem.barcode && (
+                    <button className="btn-sm" onClick={() => setShowQrModal(chem)}>QR</button>
+                  )}
               </div>
             )}
           </main>
         </>
       )}
+    
+
 
       {/* ========== USAGE HISTORY DRAWER ========== */}
       {showHistory && (
