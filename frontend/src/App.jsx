@@ -2667,24 +2667,6 @@ function App() {
               </div>
             </div>
           )}
-          {/* QR CODE DISPLAY MODAL */}
-          {showQrModal && (
-            <div className="modal-overlay" onClick={() => setShowQrModal(false)}>
-              <div className="modal" style={{ maxWidth: 320, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
-                <div className="modal-header">
-                  <h3>{showQrModal.name}</h3>
-                  <button className="icon-btn" onClick={() => setShowQrModal(null)}>✕</button>
-                </div>
-                <QRCodeSVG value={showQrModal.barcode} size={200} />
-                <p style={{ marginTop: 12, fontFamily: 'monospace', fontSize: '0.9rem' }}>
-                  {showQrModal.barcode}
-                </p>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                  Print this and stick it on the bottle
-                </p>
-              </div>
-            </div>
-          )}
 
           {/* ========== USAGE MODAL ========== */}
           {showUsageModal && usageChem && (
@@ -2810,21 +2792,6 @@ function App() {
             ) : viewMode === 'cards' ? (
               /* ---- CARD VIEW ---- */
               <div className="cards-grid">
-                {(chem.hazard_symbols?.length > 0 || chem.hazard_notes) && (
-                  <div className="card-hazards">
-                    {(chem.hazard_symbols || []).map((id) => {
-                      const h = HAZARD_OPTIONS.find((x) => x.id === id)
-                      return h ? (
-                        <span key={id} title={h.label} className="hazard-emoji">
-                          {h.emoji}
-                        </span>
-                      ) : null
-                  })}
-                  {chem.hazard_notes && (
-                    <span className="hazard-note">{chem.hazard_notes}</span>
-                 )}
-              </div>
-            )}
                 {filtered.map((chem) => {
                   const expired = isExpired(chem)
                   const low = isLow(chem)
@@ -2863,6 +2830,7 @@ function App() {
                         )}
                         {chem.cas_number && <span className="meta-item">CAS {chem.cas_number}</span>}
                         {chem.batch_lot && <span className="meta-item">Lot: {chem.batch_lot}</span>}
+                        {chem.barcode && <span className="meta-item">Barcode: {chem.barcode}</span>}
                       </div>
 
                       <div className="card-qty">
@@ -2906,14 +2874,22 @@ function App() {
                         )}
                       </div>
 
-                      {(chem.hazard_symbols || []).map((id) => {
-                        const h = HAZARD_OPTIONS.find((x) => x.id === id)
-                        return h ? (
-                          <span key={id} title={h.label} style={{ display: 'inline-flex', marginRight: 4 }}>
-                            <HazardIcon hazard={h} size={22} />
-                          </span>
-                        ) : null
-                      })}
+                      {(chem.hazard_symbols?.length > 0 || chem.hazard_notes) && (
+                        <div className="card-hazards">
+                          {(chem.hazard_symbols || []).map((id) => {
+                            const h = HAZARD_OPTIONS.find((x) => x.id === id)
+                            return h ? (
+                              <span key={id} title={h.label} style={{ display: 'inline-flex', marginRight: 4 }}>
+                                <HazardIcon hazard={h} size={22} />
+                              </span>
+                            ) : null
+                          })}
+                          {chem.hazard_notes && (
+                            <span className="hazard-note">{chem.hazard_notes}</span>
+                          )}
+                        </div>
+                      )}
+
 
                       <div className="card-sds">
                         {uploadProgress[chem.id] !== undefined ? (
@@ -2957,17 +2933,17 @@ function App() {
                       </div>
 
                       <div className="card-actions">
+                        {chem.barcode && (
+                          <button className="btn btn-sm btn-ghost" onClick={() => setShowQrModal(chem)}>
+                            QR
+                          </button>
+                        )}
                         <button className="btn btn-sm btn-ghost" onClick={() => openUsageModal(chem)}>
                           Log Usage
                         </button>
                         <button className="btn btn-sm btn-ghost" onClick={() => handleEdit(chem)}>
                           Edit
                         </button>
-                        {chem.barcode && (
-                          <button className="btn btn-sm btn-ghost" onClick={() => setShowQrModal(chem)}>
-                            QR
-                          </button>
-                        )}
                         <button
                           className="btn btn-sm btn-danger"
                           onClick={() => handleDelete(chem.id, chem.name)}
@@ -3085,8 +3061,7 @@ function App() {
                                     accept=".pdf"
                                     hidden
                                     onChange={(e) =>
-                                      e.target.files?.[0] &&
-                                      handleSdsUpload(chem.id, e.target.files[0])
+                                      e.target.files?.[0] && handleSdsUpload(chem.id, e.target.files[0])
                                     }
                                   />
                                 </label>
@@ -3106,6 +3081,11 @@ function App() {
                             )}
                           </td>
                           <td className="actions">
+                            {chem.barcode && (
+                              <button className="btn-sm" onClick={() => setShowQrModal(chem)}>
+                                QR
+                              </button>
+                            )}
                             <button className="btn-sm" onClick={() => openUsageModal(chem)}>
                               Log
                             </button>
@@ -3129,9 +3109,8 @@ function App() {
           </main>
         </>
       )}
+
     
-
-
       {/* ========== USAGE HISTORY DRAWER ========== */}
       {showHistory && (
         <div
@@ -3379,6 +3358,32 @@ function App() {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+      {/* QR CODE DISPLAY MODAL */}
+      {showQrModal && (
+        <div className="modal-overlay" onClick={() => setShowQrModal(false)}>
+          <div className="modal" style={{ maxWidth: 320, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>{showQrModal.name}</h3>
+              <button className="icon-btn" onClick={() => setShowQrModal(null)}>✕</button>
+            </div>
+            {showQrModal.barcode ? (
+              <>
+                <QRCode value={showQrModal.barcode} size={200} />
+                <p style={{ marginTop: 12, fontFamily: 'monospace', fontSize: '0.9rem', wordBreak: 'break-all' }}>
+                   {showQrModal.barcode}
+                </p>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: 8 }}>
+                  Print this and stick it on the bottle.
+                </p>
+              </>
+            ) : (
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: 8 }}>
+                No barcode/QR value available for this chemical.
+              </p>
+            )}
           </div>
         </div>
       )}
