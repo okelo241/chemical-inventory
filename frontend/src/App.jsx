@@ -2929,6 +2929,11 @@ function App() {
                         <button className="btn btn-sm btn-ghost" onClick={() => handleEdit(chem)}>
                           Edit
                         </button>
+                        {chem.barcode && (
+                          <button className="btn btn-sm btn-ghost" onClick={() => setShowQrModal(chem)}>
+                            QR
+                          </button>
+                        )}
                         <button
                           className="btn btn-sm btn-danger"
                           onClick={() => handleDelete(chem.id, chem.name)}
@@ -2939,9 +2944,6 @@ function App() {
                     </article>
                   )
                 })}
-                {chem.barcode && (
-                  <button className="btn-sm" onClick={() => setShowQrModal(chem)}>QR</button>
-                )}
               </div>
 
             ) : (
@@ -3088,9 +3090,6 @@ function App() {
                     })}
                   </tbody>
                 </table>
-                  {chem.barcode && (
-                    <button className="btn-sm" onClick={() => setShowQrModal(chem)}>QR</button>
-                  )}
               </div>
             )}
           </main>
