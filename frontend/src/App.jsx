@@ -2574,6 +2574,7 @@ function App() {
                         <input
                           name="barcode"
                           value={formData.barcode}
+                          onChange={handleChange}
                           placeholder="Scan or generate"
                           style={{ flex: 1 }}
                         />
@@ -3363,7 +3364,7 @@ function App() {
       )}
       {/* QR CODE DISPLAY MODAL */}
       {showQrModal && (
-        <div className="modal-overlay" onClick={() => setShowQrModal(false)}>
+        <div className="modal-overlay" onClick={() => setShowQrModal(null)}>
           <div className="modal" style={{ maxWidth: 320, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h3>{showQrModal.name}</h3>
@@ -3371,7 +3372,7 @@ function App() {
             </div>
             {showQrModal.barcode ? (
               <>
-                <QRCode value={showQrModal.barcode} size={200} />
+                <QRCodeSVG value={showQrModal.barcode} size={200} />
                 <p style={{ marginTop: 12, fontFamily: 'monospace', fontSize: '0.9rem', wordBreak: 'break-all' }}>
                    {showQrModal.barcode}
                 </p>
