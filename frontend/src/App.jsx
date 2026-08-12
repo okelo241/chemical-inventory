@@ -347,69 +347,6 @@ const getStatus = (chemical) => {
     return 'badge badge-green'
   }
 
-  const generateBarcodeValue = () => {
-    return `CHEM-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
-  }
-
-  const handleGenerateBarcode = () => {
-    if (!formData.barcode) {
-      setFormData(prev => ({ ...prev, barcode: generateBarcodeValue() }))
-      showMessage('success', 'Barcode generated')
-    } else {
-      showMessage('error', 'Barcode already exists. clear it first to generate a new one.') 
-    }   
-  } 
-  
-/* ===== BARCODE / QR FUNCTIONS ===== */
-  const startScanner = async () => {
-    setShowScanner(true)
-    setScanResult(null)
-
-    setTimeout(async () => {
-      try {
-        const html5QrCode = new Html5Qrcode('qr-reader')
-        html5QrCodeRef.current = html5QrCode
-
-        await html5QrCode.start(
-          { facingMode: 'environment' },
-          { fps: 10, qrbox: { width: 250, height: 250 } },
-          (decodedText) => {
-            setScanResult(decodedText)
-            html5QrCode.stop().then(() => {
-              html5QrCodeRef.current = null
-            }).catch(() => {})
-
-            const match = chemicals.find(c => c.barcode === decodedText)
-            if (match) {
-              setSearch(match.name)
-              setFilter('all')
-              setMainView('inventory')
-              showMessage('success', `Found: ${match.name}`)
-              setShowScanner(false)
-            } else {
-              showMessage('error', `No chemical found with code: ${decodedText}`)
-            }
-          },
-          () => {} // ignore scan errors
-        )
-      } catch (err) {
-        showMessage('error', 'Camera access denied or not available')
-        setShowScanner(false)
-      }
-    }, 300)
-  } 
-
-  const stopScanner = () => {
-    if (html5QrCodeRef.current) {
-      html5QrCodeRef.current.stop().then(() => {
-        html5QrCodeRef.current = null
-      }).catch(() => {})
-    }
-    setShowScanner(false)
-    setScanResult(null)
-  }
-
-
 
 /* ============================================================================
    SECTION 3: AUTO-CLASSIFICATION ENGINE
@@ -1766,6 +1703,84 @@ function App() {
       setLookingUp(false)
     }
   }
+  // ... all your useState, useRef, etc. ...
+
+  const showMessage = useCallback((type, text) => {
+    // ... existing code ...
+  }, [])
+
+  // ========== BARCODE / QR HELPERS (must be inside App) ==========
+  const generateBarcodeValue = () => {
+    return `CHEM-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`
+  }
+
+  const handleGenerateBarcode = () => {
+    if (!formData.barcode) {
+      setFormData((prev) => ({
+        ...prev,
+        barcode: generateBarcodeValue(),
+      }))
+      showMessage('success', 'Barcode generated')
+    } else {
+      showMessage('error', 'Barcode already exists. Clear it first to generate a new one.')
+    }
+  }
+
+  const startScanner = async () => {
+    setShowScanner(true)
+    setScanResult(null)
+
+    setTimeout(async () => {
+      try {
+        const html5QrCode = new Html5Qrcode('qr-reader')
+        html5QrCodeRef.current = html5QrCode
+
+        await html5QrCode.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: { width: 250, height: 250 } },
+          (decodedText) => {
+            setScanResult(decodedText)
+            html5QrCode
+              .stop()
+              .then(() => {
+                html5QrCodeRef.current = null
+              })
+              .catch(() => {})
+
+            const match = chemicals.find((c) => c.barcode === decodedText)
+            if (match) {
+              setSearch(match.name)
+              setFilter('all')
+              setMainView('inventory')
+              showMessage('success', `Found: ${match.name}`)
+              setShowScanner(false)
+            } else {
+              showMessage('error', `No chemical found with code: ${decodedText}`)
+            }
+          },
+          () => {}
+        )
+      } catch (err) {
+        showMessage('error', 'Camera access denied or not available')
+        setShowScanner(false)
+      }
+    }, 300)
+  }
+
+  const stopScanner = () => {
+    if (html5QrCodeRef.current) {
+      html5QrCodeRef.current
+        .stop()
+        .then(() => {
+          html5QrCodeRef.current = null
+        })
+        .catch(() => {})
+    }
+    setShowScanner(false)
+    setScanResult(null)
+  }
+  // ========== END BARCODE / QR ==========
+
 
   /* ============================================================================
      SELECTION & BULK ACTIONS
@@ -2623,7 +2638,7 @@ function App() {
                       <div style={{ display: 'flex', gap: 8 }}>
                         <input
                           name="barcode"
-                          value={formData.barcode}
+                          value={formData.barcode || ''}
                           onChange={handleChange}
                           placeholder="Scan or generate"
                           style={{ flex: 1 }}
