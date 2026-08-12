@@ -355,11 +355,11 @@ const getStatus = (chemical) => {
     if (!formData.barcode) {
       setFormData(prev => ({ ...prev, barcode: generateBarcodeValue() }))
       showMessage('success', 'Barcode generated')
-    }
-}
-
-
-
+    } else {
+      showMessage('error', 'Barcode already exists. clear it first to generate a new one.') 
+    }   
+  } 
+  
 /* ===== BARCODE / QR FUNCTIONS ===== */
   const startScanner = async () => {
     setShowScanner(true)
@@ -794,7 +794,7 @@ function App() {
   const [locationFilter, setLocationFilter] = useState('')
   const [hazardFilter, setHazardFilter] = useState('')
   // Auto-logout after 30 minutes of inactivity (change as needed)
-  const IDLE_TIMEOUT_MS = 1 * 60 * 1000   // 30 minutes
+  const IDLE_TIMEOUT_MS = 30 * 60 * 1000   // 30 minutes
   const idleTimerRef = useRef(null)
 
   /* ---------- Notification State ---------- */
