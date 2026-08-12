@@ -790,6 +790,7 @@ function App() {
   const [bulkMode, setBulkMode] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [compatOpen, setCompatOpen] = useState(false)
+  const [showLanding, setShowLanding] = useState(false)
   const [locationFilter, setLocationFilter] = useState('')
   const [hazardFilter, setHazardFilter] = useState('')
 
@@ -1975,6 +1976,10 @@ function App() {
     }
     return <Login onLogin={setSession} />
   }
+  // View Landing page while still logged in
+  if (session && showLanding) {
+    return <Landing onGetStarted={() => setShowLanding(false)} />
+  }
 
   /* ============================================================================
      MAIN RENDER
@@ -2110,6 +2115,13 @@ function App() {
           <div className="user-chip">
             <span className="user-email">{session.user?.email}</span>
           </div>
+          <button
+            className="btn btn-ghost"
+            onClick={() => {setShowLanding(true); setShowForm(false)}}
+            title="view landing page"
+          >
+            Landing
+          </button>
 
           <button className="btn btn-ghost" onClick={handleLogout}>
             Logout
