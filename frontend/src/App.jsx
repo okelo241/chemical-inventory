@@ -793,6 +793,9 @@ function App() {
   const [showLanding, setShowLanding] = useState(false)
   const [locationFilter, setLocationFilter] = useState('')
   const [hazardFilter, setHazardFilter] = useState('')
+  // Auto-logout after 30 minutes of inactivity (change as needed)
+  const IDLE_TIMEOUT_MS = 1 * 60 * 1000   // 30 minutes
+  const idleTimerRef = useRef(null)
 
   /* ---------- Notification State ---------- */
   const [notifications, setNotifications] = useState([])
@@ -861,6 +864,41 @@ function App() {
   const toggleTheme = useCallback(() => {
     setTheme((previous) => (previous === 'light' ? 'dark' : 'light'))
   }, [])
+
+  // Auto-logout on inactivity
+  useEffect(() => {
+    if (!session) return
+
+    const resetTimer = () => {
+      if (idleTimerRef.current) {
+        clearTimeout(idleTimerRef.current)
+      }
+      idleTimerRef.current = setTimeout(() => {
+        // Time's up → log out
+        handleLogout()
+        showMessage('error', 'You were logged out due to inactivity')
+      }, IDLE_TIMEOUT_MS)
+    }
+
+    // Events that count as “activity”
+    const events = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart', 'click']
+
+    events.forEach((event) => {
+      window.addEventListener(event, resetTimer)
+    })
+
+    // Start the timer
+    resetTimer()
+
+    return () => {
+      if (idleTimerRef.current) {
+        clearTimeout(idleTimerRef.current)
+      }
+      events.forEach((event) => {
+        window.removeEventListener(event, resetTimer)
+      })
+    }
+  }, [session])   // re-run when session changes
 
   useEffect(() => {
     localStorage.setItem('viewMode', viewMode)
