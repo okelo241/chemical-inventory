@@ -2642,6 +2642,7 @@ function App() {
                       <div className="card-actions">
                         {chem.barcode && (
                           <button
+                            type="button"
                             className="btn btn-sm btn-ghost"
                             onClick={() => setShowQrModal(chem)}
                           >
@@ -2649,15 +2650,21 @@ function App() {
                           </button>
                         )}
                         <button
+                          type="button" 
                           className="btn btn-sm btn-ghost"
                           onClick={() => openUsageModal(chem)}
                         >
                           Log Usage
                         </button>
-                        <button className="btn btn-sm btn-ghost" onClick={() => handleEdit(chem)}>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          onClick={() => handleEdit(chem)}
+                        >
                           Edit
                         </button>
                         <button
+                          type="button"
                           className="btn btn-sm btn-danger"
                           onClick={() => handleDelete(chem.id, chem.name)}
                         >

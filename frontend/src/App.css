@@ -807,6 +807,8 @@ a {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 18px;
+  overflow: visible;
+  align-items: stretch;
 }
 
 .chem-card {
@@ -820,6 +822,8 @@ a {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  overflow: visible; /* do not clip Delete / actions */
+  min-width: 0;
 }
 
 .chem-card:hover {
@@ -843,6 +847,7 @@ a {
   position: absolute;
   top: 14px;
   right: 14px;
+  z-index: 2;
 }
 
 .card-header {
@@ -850,12 +855,14 @@ a {
   justify-content: space-between;
   align-items: flex-start;
   gap: 10px;
+  padding-right: 8px; /* room if checkbox is present */
 }
 
 .card-header h3 {
   font-size: 1.1rem;
   font-weight: 650;
   line-height: 1.3;
+  word-break: break-word;
 }
 
 .card-badges {
@@ -938,7 +945,6 @@ a {
 }
 
 .card-sds {
-  margin-top: auto;
   padding-top: 8px;
   border-top: 1px solid var(--border);
 }
@@ -948,6 +954,7 @@ a {
   justify-content: space-between;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .link-btn {
@@ -999,10 +1006,53 @@ a {
   transition: width 0.2s;
 }
 
+/* ----- Actions: wrap + full Delete ----- */
 .card-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
-  margin-top: 4px;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  overflow: visible;
+}
+
+.card-actions .btn,
+.card-actions .btn-sm {
+  flex: 1 1 auto;
+  min-width: 4.5rem;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.card-actions .btn-danger,
+.card-actions .card-delete-btn {
+  flex: 0 0 auto;
+  min-width: 5rem;
+  padding: 0.4rem 0.85rem;
+  background: var(--danger) !important;
+  color: #fff !important;
+  border: 1px solid var(--danger) !important;
+  border-radius: 8px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.card-actions .btn-danger:hover,
+.card-actions .card-delete-btn:hover {
+  filter: brightness(1.08);
+}
+
+@media (max-width: 380px) {
+  .card-details {
+    grid-template-columns: 1fr;
+  }
+
+  .card-actions .btn,
+  .card-actions .btn-sm {
+    flex: 1 1 calc(50% - 8px);
+  }
 }
 
 /* ==================== TABLE VIEW ==================== */
