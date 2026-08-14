@@ -1769,62 +1769,6 @@ function App() {
               🔔
               {unreadCount > 0 && <span className="notif-badge">{unreadCount}</span>}
             </button>
-            {notifOpen && (
-              <div className="notif-dropdown">
-                <div className="notif-header">
-                  <strong>Notifications</strong>
-                  <div className="notif-actions">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
-                      }
-                    >
-                      Mark all read
-                    </button>
-                    <button type="button" onClick={() => setNotifications([])}>
-                      Clear
-                    </button>
-                  </div>
-                </div>
-                <div className="notif-list">
-                  {notifications.length === 0 ? (
-                    <div className="notif-empty">No notifications</div>
-                  ) : (
-                    notifications.map((n) => (
-                      <div
-                        key={n.id}
-                        className={`notif-item ${n.read ? 'read' : ''} type-${n.type}`}
-                        onClick={() =>
-                          setNotifications((prev) =>
-                            prev.map((x) => (x.id === n.id ? { ...x, read: true } : x))
-                          )
-                        }
-                      >
-                        <div className="notif-title">{n.title}</div>
-                        <div className="notif-message">{n.message}</div>
-                        <div className="notif-time">{new Date(n.createdAt).toLocaleString()}</div>
-                      </div>
-                    ))
-                  )}
-                </div>
-                <div className="notif-footer">
-                  <label className="notif-toggle">
-                    <input
-                      type="checkbox"
-                      checked={notificationsEnabled}
-                      onChange={toggleNotifications}
-                    />
-                    Enable notifications
-                  </label>
-                  {notifPermission !== 'granted' && (
-                    <button className="btn btn-sm btn-primary" onClick={requestNotificationPermission}>
-                      Allow browser notifications
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
           </div>
 
           <button className="icon-btn" onClick={() => setShowHistory(true)} title="Usage History">
@@ -3008,6 +2952,83 @@ function App() {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+      
+      {/* ===================== NOTIFICATIONS ===================== */}
+
+      {notifOpen && (
+        <div className="notif-modal-overlay" onClick={() => setNotifOpen(false)}>
+          <div className="notif-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="notif-modal-header">
+              <h3>Notifications</h3>
+              <div className="notif-modal-actions">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
+                  }
+               >
+                  Mark all read
+                </button>
+                <button type="button" onClick={() => setNotifications([])}>
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={() => setNotifOpen(false)}
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            <div className="notif-list">
+              {notifications.length === 0 ? (
+                <div className="notif-empty">No notifications</div>
+              ) : (
+                notifications.map((n) => (
+                  <div
+                    key={n.id}
+                    className={`notif-item ${n.read ? 'read' : ''} type-${n.type}`}
+                    onClick={() =>
+                      setNotifications((prev) =>
+                        prev.map((x) => (x.id === n.id ? { ...x, read: true } : x))
+                      )
+                    }
+                  >
+                    <div className="notif-title">{n.title}</div>
+                    <div className="notif-message">{n.message}</div>
+                    <div className="notif-time">
+                      {new Date(n.createdAt).toLocaleString()}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="notif-footer">
+              <label className="notif-toggle">
+                <input
+                  type="checkbox"
+                  checked={notificationsEnabled}
+                  onChange={toggleNotifications}
+                />
+                Enable notifications
+              </label>
+              {notifPermission !== 'granted' && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  onClick={requestNotificationPermission}
+                >
+                  Allow browser notifications
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
