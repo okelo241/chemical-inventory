@@ -980,64 +980,71 @@ function App() {
     read: false,
   })
 
-  const checkAndNotify = useCallback((chemicalList) => {
-    if (!notificationsEnabled || !Array.isArray(chemicalList) || chemicalList.length === 0) return
-
-    const newlyCreated = []
-    chemicalList.forEach((chemical) => {
-      if (isExpired(chemical)) {
-        newlyCreated.push(
-          createNotification(
-            'expired',
-            'Chemical Expired',
-            `"${chemical.name}" expired on ${formatDate(chemical.expiry_date)}`,
-            chemical.id
-          )
-        )
-      } else if (isExpiringSoon(chemical)) {
-        const remainingDays = daysUntil(chemical.expiry_date)
-        newlyCreated.push(
-          createNotification(
-            'soon',
-            'Expiring Soon',
-            `"${chemical.name}" expires in ${remainingDays} day${remainingDays !== 1 ? 's' : ''}`,
-            chemical.id
-          )
-        )
-      }
-      if (isLow(chemical)) {
-        newlyCreated.push(
-          createNotification(
-            'low',
-            'Low Stock Alert',
-            `"${chemical.name}" is running low (${chemical.quantity} ${chemical.unit} remaining)`,
-            chemical.id
-          )
-        )
-      }
-    })
-
-    setNotifications((previous) => {
-      const existingKeys = new Set(previous.map((n) => `${n.type}-${n.chemId}`))
-      const uniqueNew = newlyCreated.filter((n) => !existingKeys.has(`${n.type}-${n.chemId}`))
-      if (uniqueNew.length === 0) return previous
-
-      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-        uniqueNew.forEach((notification) => {
-          try {
-            new Notification(notification.title, {
-              body: notification.message,
-              tag: notification.id,
-            })
-          } catch {
-            // ignore browser notification failures
-          }
-        })
+  const checkAndNotify = useCallback(
+    (chemicalList) => {
+      if (!notificationsEnabled || !Array.isArray(chemicalList) || chemicalList.length === 0) {
+        return
       }
 
-      return [...uniqueNew, ...previous].slice(0, MAX_NOTIFICATIONS)
-    })
-  }, [notificationsEnabled])
+      const newlyCreated = []
+
+      chemicalList.forEach((chemical) => {
+        if (isExpired(chemical)) {
+          newlyCreated.push(
+            createNotification(
+              'expired',
+              'Chemical Expired',
+              `"${chemical.name}" expired on ${formatDate(chemical.expiry_date)}`,
+              chemical.id
+            )
+          )
+        } else if (isExpiringSoon(chemical)) {
+          const remainingDays = daysUntil(chemical.expiry_date)
+          newlyCreated.push(
+            createNotification(
+              'soon',
+              'Expiring Soon',
+              `"${chemical.name}" expires in ${remainingDays} day${remainingDays !== 1 ? 's' : ''}`,
+              chemical.id
+            )
+          )
+        }
+
+        if (isLow(chemical)) {
+          newlyCreated.push(
+            createNotification(
+              'low',
+              'Low Stock Alert',
+              `"${chemical.name}" is running low (${chemical.quantity} ${chemical.unit} remaining)`,
+              chemical.id
+            )
+          )
+        }
+      })
+
+      setNotifications((previous) => {
+        const existingKeys = new Set(previous.map((n) => `${n.type}-${n.chemId}`))
+        const uniqueNew = newlyCreated.filter((n) => !existingKeys.has(`${n.type}-${n.chemId}`))
+        if (uniqueNew.length === 0) return previous
+
+        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          uniqueNew.forEach((notification) => {
+            try {
+              new Notification(notification.title, {
+                body: notification.message,
+                tag: notification.id,
+              })
+            } catch {
+              // ignore
+            }
+          })
+        }
+
+        return [...uniqueNew, ...previous].slice(0, MAX_NOTIFICATIONS)
+      })
+    },
+    [notificationsEnabled]
+  )
 
   useEffect(() => {
     if (chemicals.length > 0) checkAndNotify(chemicals)
@@ -1051,22 +1058,59 @@ function App() {
   }, [chemicals, checkAndNotify])
 
   const requestNotificationPermission = async () => {
-    if (!('Notification' in window)) {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
       showMessage('error', 'This browser does not support notifications')
       return
     }
+
+    if (!window.isSecureContext) {
+      showMessage(
+        'error',
+        'Browser notifications require HTTPS or localhost. Open the app via https:// or http://localhost'
+      )
+      return
+    }
+
     try {
-      const permission = await Notification.requestPermission()
-      setNotifPermission(permission)
-      if (permission === 'granted') {
-        showMessage('success', 'Browser notifications have been enabled')
+      if (Notification.permission === 'granted') {
+        setNotifPermission('granted')
         setNotificationsEnabled(true)
         localStorage.setItem('notificationsEnabled', 'true')
+        showMessage('success', 'Browser notifications are already enabled')
         checkAndNotify(chemicals)
-      } else {
-        showMessage('error', 'Notification permission was denied')
+        return
       }
-    } catch {
+
+      if (Notification.permission === 'denied') {
+        setNotifPermission('denied')
+        showMessage(
+          'error',
+          'Notifications are blocked. Use the lock icon in the address bar → Notifications → Allow, then reload.'
+        )
+        return
+      }
+
+      const permission = await Notification.requestPermission()
+      setNotifPermission(permission)
+
+      if (permission === 'granted') {
+        setNotificationsEnabled(true)
+        localStorage.setItem('notificationsEnabled', 'true')
+        showMessage('success', 'Browser notifications enabled')
+        checkAndNotify(chemicals)
+        try {
+          new Notification('Chemical Inventory', {
+            body: 'Notifications are working.',
+            tag: 'chem-inv-test',
+          })
+        } catch {
+          // ignore
+        }
+      } else {
+        showMessage('error', 'Notification permission was not granted')
+      }
+    } catch (err) {
+      console.error(err)
       showMessage('error', 'Could not request notification permission')
     }
   }
@@ -1075,22 +1119,39 @@ function App() {
     const nextValue = !notificationsEnabled
     setNotificationsEnabled(nextValue)
     localStorage.setItem('notificationsEnabled', String(nextValue))
-    if (nextValue && notifPermission !== 'granted') requestNotificationPermission()
+
+    if (nextValue) {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        checkAndNotify(chemicals)
+      } else if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+        requestNotificationPermission()
+      } else if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
+        showMessage(
+          'error',
+          'In-app alerts are on, but browser popups are blocked. Allow notifications in site settings to get desktop alerts.'
+        )
+      }
+    } else {
+      showMessage('success', 'Notifications disabled')
+    }
+  }
+
+  const markAllNotificationsRead = () => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
+  }
+
+  const clearAllNotifications = () => {
+    setNotifications([])
+  }
+
+  const markNotificationRead = (id) => {
+    setNotifications((prev) => prev.map((x) => (x.id === id ? { ...x, read: true } : x)))
   }
 
   const unreadCount = useMemo(
     () => notifications.filter((n) => !n.read).length,
     [notifications]
   )
-
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (notifRef.current && !notifRef.current.contains(event.target)) setNotifOpen(false)
-      if (exportRef.current && !exportRef.current.contains(event.target)) setExportOpen(false)
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
 
   /* ======================================================================== */
   /* API LAYER                                                                */
@@ -3019,7 +3080,13 @@ function App() {
                 />
                 Enable notifications
               </label>
-              {notifPermission !== 'granted' && (
+              {typeof Notification !== 'undefined' && notifPermission === 'granted' && (
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 }}>
+                  Browser notifications are enabled. You will receive alerts for low stock and
+                  expired chemicals.
+                </p>
+              )}
+              {typeof Notification !== 'undefined' && notifPermission !== 'granted' && (
                 <button
                   type="button"
                   className="btn btn-sm btn-primary"
@@ -3028,6 +3095,11 @@ function App() {
                   Allow browser notifications
                 </button>
               )}
+              {typeof Notification !== 'undefined' && notifPermission === 'denied' && (
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 }}>
+                  Browser notifications are blocked. Please enable them in your browser settings.
+                </p>
+              )}  
             </div>
           </div>
         </div>
