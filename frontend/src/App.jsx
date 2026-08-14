@@ -1160,11 +1160,6 @@ function App() {
     }
   }, [compatibilityIssues.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  return null
-}
-
-export default App
-
   /* ======================================================================== */
   /* CRUD — CREATE / UPDATE                                                   */
   /* ======================================================================== */
