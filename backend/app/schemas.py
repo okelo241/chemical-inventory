@@ -14,6 +14,10 @@ class ChemicalBase(BaseModel):
     hazard_notes: Optional[str] = None
     molecular_formula: Optional[str] = None
     hazard_symbols: Optional[List[str]] = None
+    chemical_classes: Optional[List[str]] = None
+    batch_lot: Optional[str] = None
+    supplier: Optional[str] = None
+    barcode: Optional[str] = None
 
 
 class ChemicalCreate(ChemicalBase):
@@ -31,6 +35,10 @@ class ChemicalUpdate(BaseModel):
     hazard_notes: Optional[str] = None
     molecular_formula: Optional[str] = None
     hazard_symbols: Optional[List[str]] = None
+    chemical_classes: Optional[List[str]] = None
+    batch_lot: Optional[str] = None
+    supplier: Optional[str] = None
+    barcode: Optional[str] = None
 
 
 class Chemical(ChemicalBase):

@@ -18,4 +18,8 @@ class Chemical(Base):
     sds_filename = Column(String, nullable=True)
     molecular_formula = Column(String, nullable=True)
     hazard_symbols = Column(ARRAY(String), nullable=True)
+    chemical_classes = Column(ARRAY(String), nullable=True)  # ← add
+    batch_lot = Column(String, nullable=True)                # ← add
+    supplier = Column(String, nullable=True)                 # ← add
+    barcode = Column(String, nullable=True)                  # ← add
     user_id = Column(String, nullable=True)  # kept for compatibility
