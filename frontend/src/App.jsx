@@ -2149,7 +2149,7 @@ function App() {
                     {/* Row 1: Name + Lookup (full width) */}
                     <div className={`form-group form-group-name ${formErrors.name ? 'error' : ''}`}>
                       <label htmlFor="name">Name *</label>
-                      <div style={{ display: 'flex', gap: 8 }}>
+                      <div className="name-row">
                         <input
                           id="name"
                           name="name"
@@ -2157,7 +2157,6 @@ function App() {
                           onChange={handleChange}
                           placeholder="e.g. Hydrogen peroxide"
                           autoFocus
-                          style={{ flex: 1 }}
                         />
                         <button
                           type="button"
