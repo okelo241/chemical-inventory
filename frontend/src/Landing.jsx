@@ -1,4 +1,6 @@
+import { useState, useEffect } from 'react'
 import './App.css'
+
 // Import pictograms – adjust paths if your folder structure is different
 import ghs01 from './assets/Pictograms/exploding_bomb.gif'
 import ghs02 from './assets/Pictograms/flame.gif'
@@ -12,6 +14,20 @@ import ghs09 from './assets/Pictograms/GHS-pictogram-pollu.svg.webp'
 import biohazard from './assets/Pictograms/biohazardous_infectious_materials.gif'
 
 function Landing({ onGetStarted }) {
+  const [showBackToTop, setShowBackToTop] = useState(false)
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowBackToTop(window.scrollY > 500)
+    }
+    window.addEventListener('scroll', handleScroll)
+    return () => window.removeEventListener('scroll', handleScroll)
+  }, [])
+
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
   return (
     <div className="landing">
       {/* ===================== NAVBAR ===================== */}
@@ -25,6 +41,7 @@ function Landing({ onGetStarted }) {
           <a href="#storage-guide">Storage Guide</a>
           <a href="#ghs">GHS & Hazards</a>
           <a href="#why">Why It Matters</a>
+          <a href="#faq">FAQ</a>
         </div>
         <div className="nav-actions">
           <button className="btn btn-ghost" onClick={onGetStarted}>Log in</button>
@@ -59,6 +76,15 @@ function Landing({ onGetStarted }) {
           </div>
           <p className="hero-note">Free for individual use · No credit card required · Private by design</p>
         </div>
+      </section>
+
+      {/* ===================== TRUST BAR ===================== */}
+      <section className="trust-bar">
+        <div className="trust-item">🔒 Private accounts</div>
+        <div className="trust-item">📄 SDS linked to every record</div>
+        <div className="trust-item">⚠️ GHS pictogram support</div>
+        <div className="trust-item">🔔 Expiry & low-stock alerts</div>
+        <div className="trust-item">🧪 Built for real labs</div>
       </section>
 
       {/* ===================== PROBLEM ===================== */}
@@ -98,6 +124,36 @@ function Landing({ onGetStarted }) {
               <div className="problem-icon">💰</div>
               <h3>Duplicate purchases & waste</h3>
               <p>Without visibility of existing stock, labs reorder chemicals they already own and discard large volumes of unused material.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ===================== HOW IT WORKS ===================== */}
+      <section className="how-section">
+        <div className="section-inner">
+          <h2>How it works</h2>
+          <p className="section-lead">From empty lab to organized, searchable inventory in minutes</p>
+          <div className="how-grid">
+            <div className="how-step">
+              <div className="how-number">1</div>
+              <h3>Create your account</h3>
+              <p>Sign up in seconds. Your inventory is private and only visible to you.</p>
+            </div>
+            <div className="how-step">
+              <div className="how-number">2</div>
+              <h3>Add your chemicals</h3>
+              <p>Record name, CAS, formula, quantity, location, expiry, and GHS pictograms.</p>
+            </div>
+            <div className="how-step">
+              <div className="how-number">3</div>
+              <h3>Upload SDS files</h3>
+              <p>Attach Safety Data Sheets so the correct document is always one click away.</p>
+            </div>
+            <div className="how-step">
+              <div className="how-number">4</div>
+              <h3>Stay in control</h3>
+              <p>Search, filter, get expiry alerts, and keep a clear record for audits.</p>
             </div>
           </div>
         </div>
@@ -363,7 +419,7 @@ function Landing({ onGetStarted }) {
         </div>
       </section>
 
-      {/* ===================== GHS + BIOHAZARD SECTION (EXPANDED) ===================== */}
+      {/* ===================== GHS + BIOHAZARD SECTION ===================== */}
       <section id="ghs" className="ghs-section">
         <div className="section-inner">
           <div className="section-header">
@@ -385,9 +441,7 @@ function Landing({ onGetStarted }) {
             </p>
           </div>
 
-          {/* Official GHS Pictograms Grid */}
           <div className="ghs-grid-large">
-            {/* GHS01 */}
             <div className="ghs-card-large">
               <div className="ghs-img-wrap">
                 <img src={ghs01} alt="GHS01 Exploding Bomb – Explosive" className="ghs-pictogram-img" />
@@ -404,7 +458,6 @@ function Landing({ onGetStarted }) {
               <p className="ghs-note">Store away from heat, shock, friction and all other chemicals. Specialized magazines or cabinets required.</p>
             </div>
 
-            {/* GHS02 */}
             <div className="ghs-card-large">
               <div className="ghs-img-wrap">
                 <img src={ghs02} alt="GHS02 Flame – Flammable" className="ghs-pictogram-img" />
@@ -422,7 +475,6 @@ function Landing({ onGetStarted }) {
               <p className="ghs-note">Store in approved flammable cabinets. Keep away from oxidizers and ignition sources.</p>
             </div>
 
-            {/* GHS03 */}
             <div className="ghs-card-large">
               <div className="ghs-img-wrap">
                 <img src={ghs03} alt="GHS03 Flame over Circle – Oxidizer" className="ghs-pictogram-img" />
@@ -438,7 +490,6 @@ function Landing({ onGetStarted }) {
               <p className="ghs-note">These materials can cause or intensify fire. Keep completely separated from flammables and combustibles.</p>
             </div>
 
-            {/* GHS04 */}
             <div className="ghs-card-large">
               <div className="ghs-img-wrap">
                 <img src={ghs04} alt="GHS04 Gas Cylinder – Gas under pressure" className="ghs-pictogram-img" />
@@ -455,7 +506,6 @@ function Landing({ onGetStarted }) {
               <p className="ghs-note">Secure cylinders upright. Protect from heat. Separate fuel gases from oxidizing gases.</p>
             </div>
 
-            {/* GHS05 */}
             <div className="ghs-card-large">
               <div className="ghs-img-wrap">
                 <img src={ghs05} alt="GHS05 Corrosion" className="ghs-pictogram-img" />
@@ -471,7 +521,6 @@ function Landing({ onGetStarted }) {
               <p className="ghs-note">Use secondary containment. Separate acids from bases. Prefer non-metal shelving for strong acids.</p>
             </div>
 
-            {/* GHS06 */}
             <div className="ghs-card-large">
               <div className="ghs-img-wrap">
                 <img src={ghs06} alt="GHS06 Skull and Crossbones – Toxic" className="ghs-pictogram-img" />
@@ -487,7 +536,6 @@ function Landing({ onGetStarted }) {
               <p className="ghs-note">Highly toxic materials. Restrict access. Never store cyanides or sulfides near acids.</p>
             </div>
 
-            {/* GHS07 */}
             <div className="ghs-card-large">
               <div className="ghs-img-wrap">
                 <img src={ghs07} alt="GHS07 Exclamation Mark – Harmful / Irritant" className="ghs-pictogram-img" />
@@ -505,7 +553,6 @@ function Landing({ onGetStarted }) {
               <p className="ghs-note">Common on many laboratory reagents. Still requires proper PPE and good ventilation.</p>
             </div>
 
-            {/* GHS08 */}
             <div className="ghs-card-large">
               <div className="ghs-img-wrap">
                 <img src={ghs08} alt="GHS08 Health Hazard" className="ghs-pictogram-img" />
@@ -524,7 +571,6 @@ function Landing({ onGetStarted }) {
               <p className="ghs-note">Long-term or serious health effects. Minimize exposure and track usage carefully.</p>
             </div>
 
-            {/* GHS09 */}
             <div className="ghs-card-large">
               <div className="ghs-img-wrap">
                 <img src={ghs09} alt="GHS09 Environment – Aquatic Toxicity" className="ghs-pictogram-img" />
@@ -539,7 +585,6 @@ function Landing({ onGetStarted }) {
               <p className="ghs-note">Prevent release to drains and the environment. Follow local waste disposal rules strictly.</p>
             </div>
 
-            {/* BIOHAZARD */}
             <div className="ghs-card-large biohazard-card">
               <div className="ghs-img-wrap">
                 <img src={biohazard} alt="Biohazard symbol" className="ghs-pictogram-img" />
@@ -561,7 +606,6 @@ function Landing({ onGetStarted }) {
             </div>
           </div>
 
-          {/* Additional GHS Information */}
           <div className="ghs-extra-info">
             <div className="ghs-info-card">
               <h3>How GHS works with your inventory</h3>
@@ -571,7 +615,6 @@ function Landing({ onGetStarted }) {
                 printed labels, and emergency reports. It turns a simple name-and-quantity list into a true safety tool.
               </p>
             </div>
-
             <div className="ghs-info-card">
               <h3>Multiple pictograms on one chemical</h3>
               <p>
@@ -580,16 +623,13 @@ function Landing({ onGetStarted }) {
                 so the full hazard profile is visible at a glance.
               </p>
             </div>
-
             <div className="ghs-info-card">
               <h3>Pictograms vs. storage groups</h3>
               <p>
                 GHS pictograms communicate hazard type. Storage groups (flammables, oxidizers, acids, bases, etc.)
                 tell you <em>where</em> and <em>with what</em> a chemical may be stored. Both are needed.
-                A chemical can be flammable (GHS02) and still belong in a specific compatible group within the flammable cabinet.
               </p>
             </div>
-
             <div className="ghs-info-card">
               <h3>Secondary container labeling</h3>
               <p>
@@ -635,6 +675,39 @@ function Landing({ onGetStarted }) {
         </div>
       </section>
 
+      {/* ===================== FAQ ===================== */}
+      <section id="faq" className="faq-section">
+        <div className="section-inner">
+          <h2>Frequently Asked Questions</h2>
+          <div className="faq-grid">
+            <div className="faq-item">
+              <h3>Is it free?</h3>
+              <p>Yes. You can create an account and start managing your chemicals at no cost for individual use.</p>
+            </div>
+            <div className="faq-item">
+              <h3>Is my data private?</h3>
+              <p>Yes. Each account only sees its own inventory. Your chemicals are not shared with other users.</p>
+            </div>
+            <div className="faq-item">
+              <h3>Can I upload SDS files?</h3>
+              <p>Yes. You can upload PDF Safety Data Sheets and download them whenever you need them.</p>
+            </div>
+            <div className="faq-item">
+              <h3>Does it support GHS pictograms?</h3>
+              <p>Yes. You can mark each chemical with the relevant GHS hazard pictograms so risks are visible at a glance.</p>
+            </div>
+            <div className="faq-item">
+              <h3>Can I track expiry dates?</h3>
+              <p>Yes. The system highlights chemicals that are expired or expiring within 30 days and can warn about low stock.</p>
+            </div>
+            <div className="faq-item">
+              <h3>Who is this for?</h3>
+              <p>Chemists, laboratory technicians, research groups, teaching labs, safety officers, and small production facilities.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* ===================== FINAL CTA ===================== */}
       <section className="final-cta">
         <div className="cta-inner">
@@ -661,6 +734,7 @@ function Landing({ onGetStarted }) {
             <a href="#features">Features</a>
             <a href="#storage-guide">Storage Guide</a>
             <a href="#ghs">GHS</a>
+            <a href="#faq">FAQ</a>
             <button className="footer-btn" onClick={onGetStarted}>Get Started</button>
           </div>
         </div>
@@ -672,6 +746,13 @@ function Landing({ onGetStarted }) {
           </p>
         </div>
       </footer>
+
+      {/* ===================== BACK TO TOP ===================== */}
+      {showBackToTop && (
+        <button className="back-to-top" onClick={scrollToTop} title="Back to top">
+          ↑
+        </button>
+      )}
     </div>
   )
 }
