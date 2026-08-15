@@ -2146,7 +2146,8 @@ function App() {
 
                 <form onSubmit={handleSubmit} noValidate>
                   <div className="form-grid">
-                    <div className={`form-group ${formErrors.name ? 'error' : ''}`}>
+                    {/* Row 1: Name + Lookup (full width) */}
+                    <div className={`form-group form-group-name ${formErrors.name ? 'error' : ''}`}>
                       <label htmlFor="name">Name *</label>
                       <div style={{ display: 'flex', gap: 8 }}>
                         <input
@@ -2163,14 +2164,13 @@ function App() {
                           className="btn btn-sm btn-primary lookup-btn"
                           onClick={handlePubChemLookup}
                           disabled={lookingUp || !formData.name.trim()}
-                          title="Look up formula on PubChem"
                         >
                           {lookingUp ? '…' : 'Lookup'}
                         </button>
                       </div>
                       {formErrors.name && <span className="error-text">{formErrors.name}</span>}
                     </div>
-
+                    {/* Row 2: CAS + Formula */}
                     <div className="form-group">
                       <label htmlFor="cas_number">CAS Number</label>
                       <input
