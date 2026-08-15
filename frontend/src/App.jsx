@@ -1854,7 +1854,7 @@ function App() {
             <span className="user-email">{session.user?.email}</span>
           </div>
           <button className="btn btn-ghost" onClick={() => setShowLanding(true)}>
-            Landing
+            About
           </button>
           <button className="btn btn-ghost" onClick={handleLogout}>
             Logout
