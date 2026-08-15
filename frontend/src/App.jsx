@@ -2275,14 +2275,13 @@ function App() {
 
                     <div className="form-group">
                       <label htmlFor="barcode">Barcode / QR Value</label>
-                      <div style={{ display: 'flex', gap: 8 }}>
+                      <div className="barcode-row">
                         <input
                           id="barcode"
                           name="barcode"
                           value={formData.barcode}
                           onChange={handleChange}
                           placeholder="Scan or generate"
-                          style={{ flex: 1 }}
                         />
                         <button
                           type="button"
