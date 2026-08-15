@@ -2273,7 +2273,7 @@ function App() {
                       />
                     </div>
 
-                    <div className="form-group">
+                    <div className="form-group form-group-barcode">
                       <label htmlFor="barcode">Barcode / QR Value</label>
                       <div className="barcode-row">
                         <input
@@ -2285,7 +2285,7 @@ function App() {
                         />
                         <button
                           type="button"
-                          className="btn btn-sm btn-ghost"
+                          className="btn btn-sm btn-ghost generate-btn"
                           onClick={handleGenerateBarcode}
                         >
                           Generate

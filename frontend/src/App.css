@@ -2202,9 +2202,21 @@ select:focus-visible {
     grid-column: 1;
   }
 }
-/* Barcode + Generate — full width row */
+
+/* ==================== BARCODE + GENERATE ==================== */
+
 .form-group-barcode {
   grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.form-group-barcode label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
 }
 
 .barcode-row {
@@ -2218,6 +2230,18 @@ select:focus-visible {
   flex: 1 1 auto;
   min-width: 0;
   width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm, 10px);
+  border: 1px solid var(--border);
+  background: var(--input-bg, var(--card));
+  color: var(--text);
+  outline: none;
+  transition: var(--transition, all 0.2s ease);
+}
+
+.barcode-row input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
 
 .generate-btn {
