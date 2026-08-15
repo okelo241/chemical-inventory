@@ -2160,9 +2160,10 @@ function App() {
                         />
                         <button
                           type="button"
-                          className="btn btn-sm btn-primary"
+                          className="btn btn-sm btn-primary lookup-btn"
                           onClick={handlePubChemLookup}
-                          disabled={lookingUp}
+                          disabled={lookingUp || !formData.name.trim()}
+                          title="Look up formula on PubChem"
                         >
                           {lookingUp ? '…' : 'Lookup'}
                         </button>

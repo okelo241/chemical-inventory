@@ -2087,6 +2087,22 @@ select:focus-visible {
   }
 }
 
+.name-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.name-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.lookup-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+  min-width: 4.5rem;
+}
 
 /* ==================== AUTH PAGES ==================== */
 
@@ -2673,12 +2689,11 @@ select:focus-visible {
   }
 }
 
-/* Forgot password link */
 .auth-forgot-row {
   display: flex;
   justify-content: flex-end;
-  margin-top: -6px;
-  margin-bottom: 4px;
+  margin-top: -4px;
+  margin-bottom: 2px;
 }
 
 .auth-forgot-link {
@@ -2698,7 +2713,6 @@ select:focus-visible {
 [data-theme="dark"] .auth-forgot-link {
   color: #60a5fa;
 }
-
 /* ==================== LANDING PAGE (kept intact) ==================== */
 
 /* ============================================================
