@@ -2673,6 +2673,32 @@ select:focus-visible {
   }
 }
 
+/* Forgot password link */
+.auth-forgot-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -6px;
+  margin-bottom: 4px;
+}
+
+.auth-forgot-link {
+  background: none;
+  border: none;
+  color: #2563eb;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0;
+}
+
+.auth-forgot-link:hover {
+  text-decoration: underline;
+}
+
+[data-theme="dark"] .auth-forgot-link {
+  color: #60a5fa;
+}
+
 /* ==================== LANDING PAGE (kept intact) ==================== */
 
 /* ============================================================
