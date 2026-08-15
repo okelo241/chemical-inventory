@@ -2202,6 +2202,49 @@ select:focus-visible {
     grid-column: 1;
   }
 }
+/* Barcode + Generate — full width row */
+.form-group-barcode {
+  grid-column: 1 / -1;
+}
+
+.barcode-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  width: 100%;
+}
+
+.barcode-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+}
+
+.generate-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  min-width: 5.5rem;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm, 10px);
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: var(--transition, all 0.2s ease);
+}
+
+.generate-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+@media (max-width: 720px) {
+  .form-group-barcode {
+    grid-column: 1;
+  }
+}
 
 /* ==================== AUTH PAGES ==================== */
 
