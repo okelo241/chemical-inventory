@@ -1308,6 +1308,26 @@ function App() {
       showMessage('error', 'Failed to delete chemical')
     }
   }
+  const toggleCollection = async (chem) => {
+    const token = await getAccessToken()
+    try {
+      const res = await fetch(`${API_URL}/chemicals/${chem.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          ...chem,
+          in_collection: !chem.in_collection
+        })
+      })
+      if (!res.ok) throw new Error()
+      fetchChemicals()
+    } catch (err) {
+      showMessage('error', 'Could not update collection')
+    }
+  }
 
   const handleBulkDelete = async () => {
     if (!selectedIds.size) return
@@ -1642,6 +1662,8 @@ function App() {
     if (selectedIds.size === filtered.length) setSelectedIds(new Set())
     else setSelectedIds(new Set(filtered.map((c) => c.id)))
   }
+  // Count of chemicals currently in collection
+  const collectionCount = chemicals.filter(c => c.in_collection).length
 
   /* ======================================================================== */
   /* DERIVED DATA                                                             */
@@ -1812,93 +1834,109 @@ function App() {
       )}
 
       {/* Header */}
-      <header className="header">
-        <div className="header-brand">
-          <div className="logo">⚗️</div>
-          <div>
+      <header className="app-header">
+        <div className="brand">
+          <div className="brand-logo">⚗️</div>
+          <div className="brand-text">
             <h1>Chemical Inventory</h1>
-            <p className="subtitle">Stock • Hazards • SDS • Compatibility</p>
+            <span>Stock · Hazards · SDS · Compatibility</span>
           </div>
         </div>
 
-        <div className="header-actions">
-          {/* Utility icons group */}
-          <div className="header-icons">
+        <div className="header-tools">
+          <div className="tool-group">
             <div className="notif-wrapper" ref={notifRef}>
               <button
-                className="icon-btn notif-btn"
+                className="tool-btn"
                 onClick={() => setNotifOpen((v) => !v)}
                 title="Notifications"
               >
                 🔔
-                {unreadCount > 0 && <span className="notif-badge">{unreadCount}</span>}
+                {unreadCount > 0 && <span className="badge">{unreadCount}</span>}
               </button>
             </div>
 
-            <button className="icon-btn" onClick={() => setShowHistory(true)} title="Usage History">
+            <button className="tool-btn" onClick={() => setShowHistory(true)} title="Usage History">
               📋
             </button>
 
-            <button className="icon-btn" onClick={() => setCompatOpen(true)} title="Compatibility Checker">
+            <button className="tool-btn" onClick={() => setCompatOpen(true)} title="Compatibility Checker">
               ⚠️
               {compatibilityIssues.length > 0 && (
-                <span className="notif-badge">{compatibilityIssues.length}</span>
+                <span className="badge">{compatibilityIssues.length}</span>
               )}
             </button>
 
-            <button className="icon-btn" onClick={startScanner} title="Scan Barcode / QR">
+            <button className="tool-btn" onClick={startScanner} title="Scan Barcode / QR">
               📷
             </button>
 
-            <button className="icon-btn" onClick={() => setCommandOpen(true)} title="Command palette">
+            <button className="tool-btn" onClick={() => setCommandOpen(true)} title="Command palette">
               ⌘K
             </button>
+          </div>
+        </div>
 
-            <button className="icon-btn theme-toggle" onClick={toggleTheme} title="Toggle theme">
-              {theme === 'dark' ? '☀️' : '🌙'}
-            </button>
+        <div className="header-end">
+          <button
+            className="collection-btn"
+            onClick={() => setMainView('collection')}
+            title="My Collection – chemicals currently in use"
+          >
+            <span className="collection-icon">🧪</span>
+            <span>My Collection</span>
+            {collectionCount > 0 && (
+              <span className="collection-count">{collectionCount}</span>
+            )}
+          </button>
+
+          <button className="tool-btn theme-btn" onClick={toggleTheme} title="Toggle theme">
+            {theme === 'dark' ? '☀️' : '🌙'}
+          </button>
+
+          <div className="user-pill">
+            {session.user?.email}
           </div>
 
-          {/* User + actions group */}
-          <div className="header-user-actions">
-            <div className="user-chip">
-              <span className="user-email">{session.user?.email}</span>
-            </div>
+          <button className="ghost-btn" onClick={() => setShowLanding(true)}>
+            About
+          </button>
 
-            <button className="btn btn-ghost" onClick={() => setShowLanding(true)}>
-              About
-            </button>
+          <button className="ghost-btn" onClick={handleLogout}>
+            Logout
+          </button>
 
-            <button className="btn btn-ghost" onClick={handleLogout}>
-              Logout
-            </button>
-
-            <button
-              className="btn btn-primary"
-              onClick={() => {
-                resetForm()
-                setShowForm(true)
-              }}
-            >
-              + Add Chemical
-            </button>
-          </div>
+          <button
+            className="primary-btn"
+            onClick={() => {
+              resetForm()
+              setShowForm(true)
+            }}
+          >
+            + Add Chemical
+          </button>
         </div>
       </header>
 
       {/* View switcher */}
-      <div className="view-switcher">
+      <div className="view-tabs">
         <button
-          className={mainView === 'inventory' ? 'active' : ''}
+          className={mainView === 'inventory' ? 'tab active' : 'tab'}
           onClick={() => setMainView('inventory')}
         >
           📦 Inventory
         </button>
         <button
-          className={mainView === 'dashboard' ? 'active' : ''}
+          className={mainView === 'dashboard' ? 'tab active' : 'tab'}
           onClick={() => setMainView('dashboard')}
         >
           📊 Dashboard
+        </button>
+        <button
+          className={mainView === 'collection' ? 'tab active' : 'tab'}
+          onClick={() => setMainView('collection')}
+        >
+          🧪 My Collection
         </button>
       </div>
 
@@ -2507,11 +2545,14 @@ function App() {
             ) : viewMode === 'cards' ? (
               /* ---- CARD VIEW ---- */
               <div className="cards-grid">
-                {filtered.map((chem) => {
+                {displayedChemicals.map((chem) => {
                   const expired = isExpired(chem)
                   const low = isLow(chem)
                   const soon = isExpiringSoon(chem)
                   const days = daysUntil(chem.expiry_date)
+                  const displayedChemicals = mainView === 'collection'
+                    ? chemicals.filter((c) => c.in_collection)
+                    : filtered
                   const stockPct =
                     chem.min_stock > 0
                       ? Math.min(
@@ -2678,6 +2719,12 @@ function App() {
                           Edit
                         </button>
                         <button
+                          className="btn-sm"
+                          onClick={() => toggleCollection(chem)}
+                        >
+                          {chem.in_collection ? 'Remove from Collection' : 'Add to Collection'}
+                        </button>
+                        <button
                           type="button"
                           className="btn btn-sm btn-danger"
                           onClick={() => handleDelete(chem.id, chem.name)}
@@ -2721,11 +2768,14 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filtered.map((chem) => {
+                    {displayedChemicals.map((chem) => {
                       const expired = isExpired(chem)
                       const low = isLow(chem)
                       const soon = isExpiringSoon(chem)
                       const days = daysUntil(chem.expiry_date)
+                      const displayedChemicals = mainView === 'collection'
+                        ? chemicals.filter((c) => c.in_collection)
+                        : filtered
 
                       return (
                         <tr
@@ -2834,6 +2884,12 @@ function App() {
                             )}
                             <button className="btn-sm" onClick={() => openUsageModal(chem)}>
                               Log
+                            </button>
+                            <button
+                              className="btn-sm"
+                              onClick={() => toggleCollection(chem)}
+                            >
+                              {chem.in_collection ? 'Remove from Collection' : 'Add to Collection'}
                             </button>
                             <button className="btn-sm" onClick={() => handleEdit(chem)}>
                               Edit
