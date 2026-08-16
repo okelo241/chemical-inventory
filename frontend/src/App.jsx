@@ -43,7 +43,7 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { Html5Qrcode } from 'html5-qrcode'
 import { QRCodeSVG } from 'qrcode.react'
-import appLogo from './assets/logo.png'
+import appLogo from './assets/logo.jpg'
 import './App.css'
 
 /* -------------------------------------------------------------------------- */
