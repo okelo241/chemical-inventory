@@ -1,7 +1,9 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
-from datetime import date
+from datetime import date, datetime
 
+
+# ---------- Chemicals (existing + org id) ----------
 
 class ChemicalBase(BaseModel):
     name: str
@@ -19,6 +21,7 @@ class ChemicalBase(BaseModel):
     supplier: Optional[str] = None
     barcode: Optional[str] = None
     in_collection: Optional[bool] = False
+    organization_id: Optional[int] = None
 
 
 class ChemicalCreate(ChemicalBase):
@@ -41,11 +44,50 @@ class ChemicalUpdate(BaseModel):
     supplier: Optional[str] = None
     barcode: Optional[str] = None
     in_collection: Optional[bool] = None
+    organization_id: Optional[int] = None
 
 
 class Chemical(ChemicalBase):
     id: int
     sds_filename: Optional[str] = None
+    user_id: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+# ---------- Organizations ----------
+
+class OrganizationCreate(BaseModel):
+    name: str = Field(..., min_length=2, max_length=120)
+
+
+class OrganizationOut(BaseModel):
+    id: int
+    name: str
+    slug: Optional[str] = None
+    created_by: str
+    created_at: Optional[datetime] = None
+    role: Optional[str] = None  # current user's role in this org
+
+    class Config:
+        from_attributes = True
+
+
+class OrganizationMemberOut(BaseModel):
+    id: int
+    organization_id: int
+    user_id: str
+    role: str
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class WorkspaceContext(BaseModel):
+    """What the frontend uses for Personal vs Organization switch."""
+    mode: str  # "personal" | "organization"
+    organization_id: Optional[int] = None
+    organization_name: Optional[str] = None
+    role: Optional[str] = None
