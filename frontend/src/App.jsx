@@ -1308,26 +1308,6 @@ function App() {
       showMessage('error', 'Failed to delete chemical')
     }
   }
-  const toggleCollection = async (chem) => {
-    const token = await getAccessToken()
-    try {
-      const res = await fetch(`${API_URL}/chemicals/${chem.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          ...chem,
-          in_collection: !chem.in_collection
-        })
-      })
-      if (!res.ok) throw new Error()
-      fetchChemicals()
-    } catch (err) {
-      showMessage('error', 'Could not update collection')
-    }
-  }
 
   const handleBulkDelete = async () => {
     if (!selectedIds.size) return
@@ -1662,8 +1642,46 @@ function App() {
     if (selectedIds.size === filtered.length) setSelectedIds(new Set())
     else setSelectedIds(new Set(filtered.map((c) => c.id)))
   }
-  // Count of chemicals currently in collection
-  const collectionCount = chemicals.filter(c => c.in_collection).length
+  const toggleCollection = async (chem) => {
+    const nextValue = !chem.in_collection
+
+    setChemicals((prev) =>
+      prev.map((c) =>
+        c.id === chem.id ? { ...c, in_collection: nextValue } : c
+      )
+    )
+
+    try {
+      const token = await getAccessToken()
+      if (!token) throw new Error('No token')
+
+      const res = await fetch(`${API_URL}/chemicals/${chem.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ in_collection: nextValue }),
+      })
+
+      if (!res.ok) throw new Error('Update failed')
+
+      showMessage(
+        'success',
+        nextValue
+          ? `Added “${chem.name}” to Collection`
+          : `Removed “${chem.name}” from Collection`
+      )
+      fetchChemicals(true)
+    } catch (err) {
+      setChemicals((prev) =>
+        prev.map((c) =>
+          c.id === chem.id ? { ...c, in_collection: !nextValue } : c
+        )
+      )
+      showMessage('error', 'Could not update collection')
+    }
+  }
 
   /* ======================================================================== */
   /* DERIVED DATA                                                             */
@@ -1732,6 +1750,13 @@ function App() {
     return result
   }, [chemicals, search, filter, sortBy, locationFilter, hazardFilter])
 
+  const displayedChemicals = useMemo(() => {
+    if (mainView === 'collection') {
+      return chemicals.filter((c) => !!c.in_collection)
+    }
+    return filtered
+  }, [mainView, chemicals, filtered])
+
   const filteredTransactions = useMemo(() => {
     let list = [...transactions]
     if (historyFilter !== 'all') list = list.filter((t) => t.type === historyFilter)
@@ -1757,6 +1782,7 @@ function App() {
     }),
     [chemicals]
   )
+
 
   /* ======================================================================== */
   /* KEYBOARD SHORTCUTS                                                       */
@@ -2521,26 +2547,36 @@ function App() {
                   <div key={i} className="skeleton-card" />
                 ))}
               </div>
-            ) : filtered.length === 0 ? (
+            ) : displayedChemicals.length === 0 ? (
               <div className="empty-state">
                 <div className="empty-icon">🧪</div>
-                <h3>No chemicals found</h3>
+                <h3>
+                  {mainView === 'collection'
+                    ? 'Collection is empty'
+                    : 'No chemicals found'}
+                </h3>
                 <p>
-                  {search || filter !== 'all' || locationFilter || hazardFilter
-                    ? 'Try adjusting your search or filters.'
-                    : 'Get started by adding your first chemical.'}
+                  {mainView === 'collection'
+                    ? 'Add chemicals with “Add to Collection” from Inventory.'
+                    : search || filter !== 'all' || locationFilter || hazardFilter
+                      ? 'Try adjusting your search or filters.'
+                      : 'Get started by adding your first chemical.'}
                 </p>
-                {!search && filter === 'all' && !locationFilter && !hazardFilter && (
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => {
-                      resetForm()
-                      setShowForm(true)
-                    }}
-                  >
-                    + Add Chemical
-                  </button>
-                )}
+                {mainView !== 'collection' &&
+                  !search &&
+                  filter === 'all' &&
+                  !locationFilter &&
+                  !hazardFilter && (
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => {
+                        resetForm()
+                        setShowForm(true)
+                      }}
+                    >
+                      + Add Chemical
+                    </button>
+                  )}
               </div>
             ) : viewMode === 'cards' ? (
               /* ---- CARD VIEW ---- */
@@ -2550,9 +2586,6 @@ function App() {
                   const low = isLow(chem)
                   const soon = isExpiringSoon(chem)
                   const days = daysUntil(chem.expiry_date)
-                  const displayedChemicals = mainView === 'collection'
-                    ? chemicals.filter((c) => c.in_collection)
-                    : filtered
                   const stockPct =
                     chem.min_stock > 0
                       ? Math.min(
@@ -2719,12 +2752,6 @@ function App() {
                           Edit
                         </button>
                         <button
-                          className="btn-sm"
-                          onClick={() => toggleCollection(chem)}
-                        >
-                          {chem.in_collection ? 'Remove from Collection' : 'Add to Collection'}
-                        </button>
-                        <button
                           type="button"
                           className="btn btn-sm btn-danger"
                           onClick={() => handleDelete(chem.id, chem.name)}
@@ -2768,14 +2795,11 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {displayedChemicals.map((chem) => {
+                    {filtered.map((chem) => {
                       const expired = isExpired(chem)
                       const low = isLow(chem)
                       const soon = isExpiringSoon(chem)
                       const days = daysUntil(chem.expiry_date)
-                      const displayedChemicals = mainView === 'collection'
-                        ? chemicals.filter((c) => c.in_collection)
-                        : filtered
 
                       return (
                         <tr
@@ -2884,12 +2908,6 @@ function App() {
                             )}
                             <button className="btn-sm" onClick={() => openUsageModal(chem)}>
                               Log
-                            </button>
-                            <button
-                              className="btn-sm"
-                              onClick={() => toggleCollection(chem)}
-                            >
-                              {chem.in_collection ? 'Remove from Collection' : 'Add to Collection'}
                             </button>
                             <button className="btn-sm" onClick={() => handleEdit(chem)}>
                               Edit
