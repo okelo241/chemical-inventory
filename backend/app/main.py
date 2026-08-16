@@ -10,6 +10,9 @@ from supabase import create_client, Client
 from . import models, schemas
 from .database import engine, get_db
 
+import secrets
+from datetime import datetime, timezone
+
 # Create tables (new columns still need ALTER on an existing DB)
 models.Base.metadata.create_all(bind=engine)
 
@@ -457,3 +460,171 @@ def create_transaction(
         row["created_at"] = datetime.now(timezone.utc).isoformat()
     _TRANSACTIONS.insert(0, row)
     return row
+
+def require_org_role(
+    db: Session, user_id: str, organization_id: int, allowed: set[str]
+) -> models.OrganizationMember:
+    m = get_membership(db, user_id, organization_id)
+    if not m or m.role not in allowed:
+        raise HTTPException(status_code=403, detail="Insufficient organization permissions")
+    return m
+
+
+@app.post("/organizations/{organization_id}/invites", response_model=schemas.InviteOut)
+def invite_member(
+    organization_id: int,
+    payload: schemas.InviteCreate,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    require_org_role(db, user_id, organization_id, {"owner", "admin"})
+
+    role = (payload.role or "member").lower()
+    if role not in ("member", "admin"):
+        raise HTTPException(status_code=400, detail="role must be member or admin")
+
+    email = payload.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Invalid email")
+
+    # Already a member? (optional: match by email later via profiles table)
+    existing_invite = (
+        db.query(models.OrganizationInvite)
+        .filter(
+            models.OrganizationInvite.organization_id == organization_id,
+            models.OrganizationInvite.email == email,
+            models.OrganizationInvite.status == "pending",
+        )
+        .first()
+    )
+    if existing_invite:
+        return existing_invite
+
+    token = secrets.token_urlsafe(32)
+    invite = models.OrganizationInvite(
+        organization_id=organization_id,
+        email=email,
+        role=role,
+        invited_by=user_id,
+        token=token,
+        status="pending",
+    )
+    db.add(invite)
+    db.commit()
+    db.refresh(invite)
+
+    # Phase 2: return token so you can show/copy invite link.
+    # Later: send email via Supabase/Resend with:
+    #   https://your-app.com/accept-invite?token=...
+    return invite
+
+
+@app.get("/organizations/{organization_id}/invites", response_model=List[schemas.InviteOut])
+def list_invites(
+    organization_id: int,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    require_org_role(db, user_id, organization_id, {"owner", "admin"})
+    return (
+        db.query(models.OrganizationInvite)
+        .filter(models.OrganizationInvite.organization_id == organization_id)
+        .order_by(models.OrganizationInvite.created_at.desc())
+        .all()
+    )
+
+
+@app.post("/invites/accept", response_model=schemas.OrganizationOut)
+def accept_invite(
+    payload: schemas.AcceptInviteIn,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    invite = (
+        db.query(models.OrganizationInvite)
+        .filter(
+            models.OrganizationInvite.token == payload.token,
+            models.OrganizationInvite.status == "pending",
+        )
+        .first()
+    )
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found or already used")
+
+    # Optional: enforce email match if you store user email from JWT/user metadata
+    # For now accept if logged in (simplest Phase 2)
+
+    if get_membership(db, user_id, invite.organization_id):
+        invite.status = "accepted"
+        invite.accepted_at = datetime.now(timezone.utc)
+        db.commit()
+    else:
+        db.add(
+            models.OrganizationMember(
+                organization_id=invite.organization_id,
+                user_id=user_id,
+                role=invite.role or "member",
+            )
+        )
+        invite.status = "accepted"
+        invite.accepted_at = datetime.now(timezone.utc)
+        db.commit()
+
+    org = (
+        db.query(models.Organization)
+        .filter(models.Organization.id == invite.organization_id)
+        .first()
+    )
+    membership = get_membership(db, user_id, org.id)
+    return schemas.OrganizationOut(
+        id=org.id,
+        name=org.name,
+        slug=org.slug,
+        created_by=org.created_by,
+        created_at=org.created_at,
+        role=membership.role if membership else invite.role,
+    )
+
+
+@app.delete("/organizations/{organization_id}/invites/{invite_id}")
+def revoke_invite(
+    organization_id: int,
+    invite_id: int,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    require_org_role(db, user_id, organization_id, {"owner", "admin"})
+    invite = (
+        db.query(models.OrganizationInvite)
+        .filter(
+            models.OrganizationInvite.id == invite_id,
+            models.OrganizationInvite.organization_id == organization_id,
+        )
+        .first()
+    )
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    invite.status = "revoked"
+    db.commit()
+    return {"message": "Invite revoked"}
+
+
+@app.patch("/organizations/{organization_id}/members/{member_user_id}")
+def update_member_role(
+    organization_id: int,
+    member_user_id: str,
+    role: str = Query(...),
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    require_org_role(db, user_id, organization_id, {"owner"})
+    if role not in ("member", "admin", "owner"):
+        raise HTTPException(status_code=400, detail="Invalid role")
+
+    member = get_membership(db, member_user_id, organization_id)
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+
+    member.role = role
+    db.commit()
+    return {"message": "Role updated", "user_id": member_user_id, "role": role}

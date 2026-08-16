@@ -908,6 +908,50 @@ function App() {
     }
   }, [session]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (!session) return
+    const params = new URLSearchParams(window.location.search)
+    const token = params.get('token')
+    if (!token) return
+
+    ;(async () => {
+      try {
+        const access = await getAccessToken()
+        const res = await fetch(`${API_URL}/invites/accept`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${access}`,
+          },
+          body: JSON.stringify({ token }),
+        })
+        if (!res.ok) return
+        const org = await res.json()
+        await fetchOrganizations()
+        switchWorkspace({
+          mode: 'organization',
+          organization_id: org.id,
+        })
+        showMessage('success', `Joined ${org.name}`)
+        window.history.replaceState({}, '', window.location.pathname)
+      } catch (err) {
+        console.warn('Accept invite failed', err)
+      }
+    })()
+  }, [session])
+
+  useEffect(() => {
+    if (session) {
+      fetchOrganizations()
+    }
+  }, [session])
+
+  useEffect(() => {
+    if (session) {
+      fetchChemicals()
+    }
+  }, [session, workspace.mode, workspace.organization_id])
+
   /* ======================================================================== */
   /* BARCODE / QR HANDLERS (MUST stay inside App)                             */
   /* ======================================================================== */
@@ -1164,7 +1208,10 @@ function App() {
       else setRefreshing(true)
       const token = await getAccessToken()
       if (!token) throw new Error('No access token available')
-      const response = await fetch(`${API_URL}/chemicals`, {
+      const chemicalsUrl = activeOrgId
+        ? `${API_URL}/chemicals?organization_id=${activeOrgId}`
+        : `${API_URL}/chemicals`
+      const response = await fetch(chemicalsUrl, {
         headers: { Authorization: `Bearer ${token}` },
       })
       if (!response.ok) throw new Error(`HTTP error ${response.status}`)
@@ -1178,6 +1225,26 @@ function App() {
       setRefreshing(false)
     }
   }, [API_URL, getAccessToken, showMessage])
+
+    const switchWorkspace = (next) => {
+    setWorkspace(next)
+    localStorage.setItem('workspace', JSON.stringify(next))
+  }
+
+  const fetchOrganizations = async () => {
+    try {
+      const token = await getAccessToken()
+      if (!token) return
+      const res = await fetch(`${API_URL}/organizations`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) return
+      const data = await res.json()
+      setOrganizations(Array.isArray(data) ? data : [])
+    } catch (err) {
+      console.warn('Could not load organizations', err)
+    }
+  }
 
   const fetchTransactions = useCallback(async () => {
     try {
@@ -1199,8 +1266,9 @@ function App() {
     if (session) {
       fetchChemicals()
       fetchTransactions()
+      fetchOrganizations()
     }
-  }, [session, fetchChemicals, fetchTransactions])
+  }, [session, fetchChemicals, fetchTransactions, fetchOrganizations]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ======================================================================== */
   /* DERIVED COMPATIBILITY (must be early enough for effects)                 */
@@ -1257,11 +1325,16 @@ function App() {
         hazard_symbols: formData.hazard_symbols?.length ? formData.hazard_symbols : null,
         batch_lot: formData.batch_lot.trim() || null,
         supplier: formData.supplier.trim() || null,
-        chemical_classes: formData.chemical_classes?.length ? formData.chemical_classes : null,
+        chemical_classes: formData.chemical_classes?.length
+          ? formData.chemical_classes
+          : null,
         barcode: formData.barcode.trim() || null,
+        organization_id: activeOrgId || null,
       }
 
-      const url = editingId ? `${API_URL}/chemicals/${editingId}` : `${API_URL}/chemicals`
+      const url = editingId
+        ? `${API_URL}/chemicals/${editingId}`
+        : `${API_URL}/chemicals`
       const method = editingId ? 'PUT' : 'POST'
       const response = await fetch(url, {
         method,
@@ -1570,6 +1643,40 @@ function App() {
     setShowForm(false)
   }
 
+  const inviteToOrg = async (email, role = 'member') => {
+    if (!activeOrgId) {
+      showMessage('error', 'Switch to an organization workspace first')
+      return
+    }
+    try {
+      const token = await getAccessToken()
+      const res = await fetch(
+        `${API_URL}/organizations/${activeOrgId}/invites`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ email: email.trim().toLowerCase(), role }),
+        }
+      )
+      if (!res.ok) {
+        showMessage('error', 'Invite failed')
+        return
+      }
+      const invite = await res.json()
+      showMessage('success', `Invite created for ${email}`)
+      if (invite.token) {
+        const link = `${window.location.origin}/?token=${invite.token}`
+        console.log('Invite link:', link)
+        window.prompt('Copy invite link', link)
+      }
+    } catch (err) {
+      showMessage('error', 'Invite failed')
+    }
+  }
+
   const handleEdit = (chemical) => {
     setFormData({
       name: chemical.name || '',
@@ -1757,11 +1864,26 @@ function App() {
     }
     return filtered
   }, [mainView, chemicals, filtered])
+  
+  const [organizations, setOrganizations] = useState([])
+  const [workspace, setWorkspace] = useState(() => {
+    try {
+      const saved = localStorage.getItem('workspace')
+      return saved
+        ? JSON.parse(saved)
+        : { mode: 'personal', organization_id: null }
+    } catch {
+      return { mode: 'personal', organization_id: null }
+    }
+  })
 
   const collectionCount = useMemo(
     () => chemicals.filter((c) => !!c.in_collection).length,
     [chemicals]
   )
+
+  const activeOrgId =
+    workspace.mode === 'organization' ? workspace.organization_id : null
 
   const filteredTransactions = useMemo(() => {
     let list = [...transactions]
@@ -1912,6 +2034,84 @@ function App() {
         </div>
 
         <div className="header-end">
+
+          <div className="workspace-switcher">
+            <select
+              value={
+                workspace.mode === 'personal'
+                  ? 'personal'
+                  : `org-${workspace.organization_id}`
+              }
+              onChange={(e) => {
+                const v = e.target.value
+                if (v === 'personal') {
+                  switchWorkspace({ mode: 'personal', organization_id: null })
+                } else {
+                  const id = Number(v.replace('org-', ''))
+                  switchWorkspace({
+                    mode: 'organization',
+                    organization_id: id,
+                  })
+                }
+              }}
+              title="Workspace"
+            >
+              <option value="personal">Personal</option>
+              {organizations.map((org) => (
+                <option key={org.id} value={`org-${org.id}`}>
+                  {org.name}
+                  {org.role ? ` (${org.role})` : ''}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={async () => {
+                const name = window.prompt('Organization name')
+                if (!name || !name.trim()) return
+                try {
+                  const token = await getAccessToken()
+                  const res = await fetch(`${API_URL}/organizations`, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      Authorization: `Bearer ${token}`,
+                    },
+                    body: JSON.stringify({ name: name.trim() }),
+                  })
+                  if (!res.ok) {
+                    showMessage('error', 'Could not create organization')
+                    return
+                  }
+                  const org = await res.json()
+                  await fetchOrganizations()
+                  switchWorkspace({
+                    mode: 'organization',
+                    organization_id: org.id,
+                  })
+                  showMessage('success', `Created ${org.name}`)
+                } catch (err) {
+                  showMessage('error', 'Could not create organization')
+                }
+              }}
+            >
+              + Org
+            </button>
+
+            {activeOrgId && (
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              onClick={() => {
+                const email = window.prompt('Invite email')
+                if (email) inviteToOrg(email, 'member')
+              }}
+            >
+              Invite
+            </button>
+          )}
+          </div>
 
           <button className="tool-btn theme-btn" onClick={toggleTheme} title="Toggle theme">
             {theme === 'dark' ? '☀️' : '🌙'}

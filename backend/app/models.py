@@ -47,3 +47,16 @@ class OrganizationMember(Base):
     user_id = Column(String, nullable=False, index=True)  # Supabase user id
     role = Column(String, default="member")  # owner | admin | member
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class OrganizationInvite(Base):
+    __tablename__ = "organization_invites"
+
+    id = Column(Integer, primary_key=True, index=True)
+    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
+    email = Column(String, nullable=False, index=True)
+    role = Column(String, default="member")  # member | admin
+    invited_by = Column(String, nullable=False)
+    token = Column(String, unique=True, nullable=False, index=True)
+    status = Column(String, default="pending")  # pending | accepted | revoked
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    accepted_at = Column(DateTime(timezone=True), nullable=True)

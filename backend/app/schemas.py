@@ -91,3 +91,23 @@ class WorkspaceContext(BaseModel):
     organization_id: Optional[int] = None
     organization_name: Optional[str] = None
     role: Optional[str] = None
+
+class InviteCreate(BaseModel):
+    email: str
+    role: str = "member"  # member | admin
+
+
+class InviteOut(BaseModel):
+    id: int
+    organization_id: int
+    email: str
+    role: str
+    status: str
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AcceptInviteIn(BaseModel):
+    token: str
