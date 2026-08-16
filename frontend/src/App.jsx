@@ -800,6 +800,22 @@ function App() {
   const [scanResult, setScanResult] = useState(null)
   const [showQrModal, setShowQrModal] = useState(null)
 
+  /* ---------- Organizations / Workspace ---------- */
+  const [organizations, setOrganizations] = useState([])
+  const [workspace, setWorkspace] = useState(() => {
+    try {
+      const saved = localStorage.getItem('workspace')
+      return saved
+        ? JSON.parse(saved)
+        : { mode: 'personal', organization_id: null }
+    } catch {
+      return { mode: 'personal', organization_id: null }
+    }
+  })
+
+  const activeOrgId =
+    workspace.mode === 'organization' ? workspace.organization_id : null
+
   /* ---------- Refs ---------- */
   const searchRef = useRef(null)
   const formRef = useRef(null)
@@ -1224,9 +1240,9 @@ function App() {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [API_URL, getAccessToken, showMessage])
+  }, [API_URL, getAccessToken, showMessage, activeOrgId])
 
-    const switchWorkspace = (next) => {
+  const switchWorkspace = (next) => {
     setWorkspace(next)
     localStorage.setItem('workspace', JSON.stringify(next))
   }
@@ -1864,26 +1880,11 @@ function App() {
     }
     return filtered
   }, [mainView, chemicals, filtered])
-  
-  const [organizations, setOrganizations] = useState([])
-  const [workspace, setWorkspace] = useState(() => {
-    try {
-      const saved = localStorage.getItem('workspace')
-      return saved
-        ? JSON.parse(saved)
-        : { mode: 'personal', organization_id: null }
-    } catch {
-      return { mode: 'personal', organization_id: null }
-    }
-  })
 
   const collectionCount = useMemo(
     () => chemicals.filter((c) => !!c.in_collection).length,
     [chemicals]
   )
-
-  const activeOrgId =
-    workspace.mode === 'organization' ? workspace.organization_id : null
 
   const filteredTransactions = useMemo(() => {
     let list = [...transactions]
