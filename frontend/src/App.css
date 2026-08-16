@@ -4336,6 +4336,21 @@ body {
   height: 42px;
 }
 
+.workspace-switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-switcher select {
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font-size: 0.85rem;
+  max-width: 200px;
+}
 
 /* =========================================================
    STRONG FIX – Inventory view overflowing
