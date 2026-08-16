@@ -1909,6 +1909,18 @@ function App() {
         </div>
 
         <div className="header-end">
+          <button
+            className="collection-btn"
+            onClick={() => setMainView('collection')}
+            title="My Collection – chemicals currently in use"
+          >
+            <span className="collection-icon">🧪</span>
+            <span>My Collection</span>
+            {collectionCount > 0 && (
+              <span className="collection-count">{collectionCount}</span>
+            )}
+          </button>
+
           <button className="tool-btn theme-btn" onClick={toggleTheme} title="Toggle theme">
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>
@@ -1952,18 +1964,17 @@ function App() {
         >
           📊 Dashboard
         </button>
-        <button
-          className={mainView === 'collection' ? 'tab active' : 'tab'}
-          onClick={() => setMainView('collection')}
-          title="My Collection – chemicals currently in use"
-        >
-          <span>
-            🧪 My Collection
+          <button
+            className="collection-btn"
+            onClick={() => setMainView('collection')}
+            title="My Collection – chemicals currently in use"
+          >
+            <span className="collection-icon">🧪</span>
+            <span>My Collection</span>
             {collectionCount > 0 && (
-                <span className="collection-count">{collectionCount}</span>
+              <span className="collection-count">{collectionCount}</span>
             )}
-          </span>
-        </button>
+          </button>
       </div>
 
       {/* ===================== DASHBOARD ===================== */}
