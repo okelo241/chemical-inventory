@@ -1757,6 +1757,11 @@ function App() {
     return filtered
   }, [mainView, chemicals, filtered])
 
+  const collectionCount = useMemo(
+    () => chemicals.filter((c) => !!c.in_collection).length,
+    [chemicals]
+  )
+
   const filteredTransactions = useMemo(() => {
     let list = [...transactions]
     if (historyFilter !== 'all') list = list.filter((t) => t.type === historyFilter)
@@ -2747,6 +2752,13 @@ function App() {
                         <button
                           type="button"
                           className="btn btn-sm btn-ghost"
+                          onClick={() => toggleCollection(chem)}
+                        >
+                          {chem.in_collection ? 'Remove' : 'Collect'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
                           onClick={() => handleEdit(chem)}
                         >
                           Edit
@@ -2773,7 +2785,7 @@ function App() {
                         <th className="col-check">
                           <input
                             type="checkbox"
-                            checked={selectedIds.size === filtered.length && filtered.length > 0}
+                            checked={selectedIds.size === displayedChemicals.length && displayedChemicals.length > 0}
                             onChange={toggleSelectAll}
                             aria-label="Select all"
                           />
@@ -2795,7 +2807,7 @@ function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filtered.map((chem) => {
+                    {displayedChemicals.map((chem) => {
                       const expired = isExpired(chem)
                       const low = isLow(chem)
                       const soon = isExpiringSoon(chem)
@@ -2911,6 +2923,12 @@ function App() {
                             </button>
                             <button className="btn-sm" onClick={() => handleEdit(chem)}>
                               Edit
+                            </button>
+                            <button
+                              className="btn-sm"
+                              onClick={() => toggleCollection(chem)}
+                            >
+                              {chem.in_collection ? 'Remove' : 'Collect'}
                             </button>
                             <button
                               className="btn-sm btn-danger"

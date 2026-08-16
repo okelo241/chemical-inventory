@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Date, Text
+from sqlalchemy import Column, Integer, String, Float, Date, Text, Boolean
 from sqlalchemy.dialects.postgresql import ARRAY
 from .database import Base
 
@@ -18,8 +18,9 @@ class Chemical(Base):
     sds_filename = Column(String, nullable=True)
     molecular_formula = Column(String, nullable=True)
     hazard_symbols = Column(ARRAY(String), nullable=True)
-    chemical_classes = Column(ARRAY(String), nullable=True)  # ← add
-    batch_lot = Column(String, nullable=True)                # ← add
-    supplier = Column(String, nullable=True)                 # ← add
-    barcode = Column(String, nullable=True)                  # ← add
+    chemical_classes = Column(ARRAY(String), nullable=True)
+    batch_lot = Column(String, nullable=True)
+    supplier = Column(String, nullable=True)
+    barcode = Column(String, nullable=True)
+    in_collection = Column(Boolean, default=False)  # My Collection flag
     user_id = Column(String, nullable=True)  # kept for compatibility

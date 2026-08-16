@@ -18,6 +18,7 @@ class ChemicalBase(BaseModel):
     batch_lot: Optional[str] = None
     supplier: Optional[str] = None
     barcode: Optional[str] = None
+    in_collection: Optional[bool] = False
 
 
 class ChemicalCreate(ChemicalBase):
@@ -39,6 +40,7 @@ class ChemicalUpdate(BaseModel):
     batch_lot: Optional[str] = None
     supplier: Optional[str] = None
     barcode: Optional[str] = None
+    in_collection: Optional[bool] = None
 
 
 class Chemical(ChemicalBase):
