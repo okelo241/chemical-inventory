@@ -123,62 +123,205 @@ a {
 }
 
 /* ==================== HEADER ==================== */
+
 .header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 24px;
-  gap: 16px;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 0 12px;
+  margin-bottom: 4px;
   flex-wrap: wrap;
 }
 
 .header-brand {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
+  flex-shrink: 0;
 }
 
-.logo {
-  font-size: 2rem;
-  line-height: 1;
+.header-brand .logo {
+  width: 44px;
+  height: 44px;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.35rem;
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.28);
 }
 
-.header h1 {
-  font-size: 1.65rem;
-  font-weight: 750;
-  color: var(--primary);
-  letter-spacing: -0.03em;
+.header-brand h1 {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: #2563eb;
+  margin: 0;
+  letter-spacing: -0.02em;
   line-height: 1.2;
 }
 
-.subtitle {
-  color: var(--text-muted);
-  font-size: 0.88rem;
-  margin-top: 2px;
+.header-brand .subtitle {
+  font-size: 0.78rem;
+  color: #64748b;
+  margin: 2px 0 0;
 }
 
+[data-theme="dark"] .header-brand h1 {
+  color: #60a5fa;
+}
+
+[data-theme="dark"] .header-brand .subtitle {
+  color: #94a3b8;
+}
+
+/* Actions container */
 .header-actions {
   display: flex;
-  gap: 10px;
   align-items: center;
+  gap: 14px;
   flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* Group of icon buttons */
+.header-icons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+[data-theme="dark"] .header-icons {
+  background: #1e293b;
+  border-color: #334155;
+}
+
+.header-icons .icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  border: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 1rem;
+  position: relative;
+  transition: all 0.15s ease;
+}
+
+.header-icons .icon-btn:hover {
+  background: #e2e8f0;
+}
+
+[data-theme="dark"] .header-icons .icon-btn:hover {
+  background: #334155;
+}
+
+/* User + main buttons group */
+.header-user-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .user-chip {
-  padding: 6px 12px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: 0.85rem;
-  color: var(--text-muted);
-}
-
-.user-email {
   max-width: 180px;
+  padding: 6px 12px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  color: #475569;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  display: inline-block;
+}
+
+[data-theme="dark"] .user-chip {
+  background: #1e293b;
+  border-color: #334155;
+  color: #94a3b8;
+}
+
+/* View switcher */
+.view-switcher {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+
+.view-switcher button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #64748b;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.view-switcher button:hover {
+  background: #f8fafc;
+  color: #334155;
+}
+
+.view-switcher button.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: white;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+}
+
+[data-theme="dark"] .view-switcher button {
+  background: #1e293b;
+  border-color: #334155;
+  color: #94a3b8;
+}
+
+[data-theme="dark"] .view-switcher button:hover {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+[data-theme="dark"] .view-switcher button.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: white;
+}
+
+/* Responsive */
+@media (max-width: 960px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
+
+@media (max-width: 640px) {
+  .header-user-actions .btn-ghost {
+    display: none;
+  }
+
+  .user-chip {
+    max-width: 140px;
+  }
 }
 
 /* ==================== BUTTONS ==================== */
