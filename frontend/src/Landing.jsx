@@ -34,10 +34,12 @@ function Landing({ onGetStarted }) {
       {/* ===================== NAVBAR ===================== */}
       <nav className="landing-nav">
         <div className="nav-brand">
-          <div className="nav-logo">
-            <img src={appLogo} alt="Chemical Inventory" className="app-logo-img" />
-            <span>Chemical Inventory</span>
-          </div>
+          <img
+            src={appLogo} 
+            alt="Chemical Inventory" 
+            className="app-logo-img" 
+          />
+          <span>Chemical Inventory</span>
         </div>
         <div className="nav-links">
           <a href="#features">Features</a>

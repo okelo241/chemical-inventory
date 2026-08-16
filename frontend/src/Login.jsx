@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from './supabase'
-import appLogo from './assets/logo.jpg '
+import appLogo from './assets/logo.jpg'
 import './App.css'
 
 /* ============================================================
