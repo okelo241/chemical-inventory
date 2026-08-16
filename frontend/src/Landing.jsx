@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import appLogo from './assets/logo.jpg'
 import './App.css'
 
 // Import pictograms – adjust paths if your folder structure is different
@@ -33,8 +34,10 @@ function Landing({ onGetStarted }) {
       {/* ===================== NAVBAR ===================== */}
       <nav className="landing-nav">
         <div className="nav-brand">
-          <span className="nav-logo">🧪</span>
-          <span>Chemical Inventory</span>
+          <div className="nav-logo">
+            <img src={appLogo} alt="Chemical Inventory" className="app-logo-img" />
+            <span>Chemical Inventory</span>
+          </div>
         </div>
         <div className="nav-links">
           <a href="#features">Features</a>

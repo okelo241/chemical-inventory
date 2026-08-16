@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from './supabase'
+import appLogo from './assets/logo.jpg '
 import './App.css'
 
 /* ============================================================
@@ -482,21 +483,7 @@ function Login({ onLogin }) {
         <header className="auth-header">
           <div className="auth-logo-wrap">
             <div className="auth-logo">
-              <svg
-                width="28"
-                height="28"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.7"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M9 3h6v2H9z" />
-                <path d="M10 5v3.15a2 2 0 0 1-.4 1.2L6.2 15.4A3.4 3.4 0 0 0 9.1 21h5.8a3.4 3.4 0 0 0 2.9-5.6l-3.4-6.05a2 2 0 0 1-.4-1.2V5" />
-                <circle cx="12" cy="17" r="1.15" fill="currentColor" stroke="none" />
-              </svg>
+              <img src={appLogo} alt="Chemical Inventory" className="auth-logo-img" />
             </div>
             <div className="auth-logo-ring" aria-hidden="true" />
           </div>

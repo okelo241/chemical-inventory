@@ -43,6 +43,7 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { Html5Qrcode } from 'html5-qrcode'
 import { QRCodeSVG } from 'qrcode.react'
+import appLogo from './assets/logo.png'
 import './App.css'
 
 /* -------------------------------------------------------------------------- */
@@ -1867,7 +1868,9 @@ function App() {
       {/* Header */}
       <header className="app-header">
         <div className="brand">
-          <div className="brand-logo">⚗️</div>
+          <div className="brand-logo">
+            <img src={appLogo} alt="Chemical Inventory" className="app-logo-img" />
+          </div>
           <div className="brand-text">
             <h1>Chemical Inventory</h1>
             <span>Stock · Hazards · SDS · Compatibility</span>
@@ -1909,7 +1912,7 @@ function App() {
         </div>
 
         <div className="header-end">
-          
+
           <button className="tool-btn theme-btn" onClick={toggleTheme} title="Toggle theme">
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>

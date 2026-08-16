@@ -4285,6 +4285,56 @@ body {
     transition: none !important;
   }
 }
+/* ==================== APP LOGO IMAGES ==================== */
+
+.auth-logo-img,
+.nav-logo-img,
+.app-logo-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* Login page logo */
+.auth-logo {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.auth-logo-img {
+  width: 56px;
+  height: 56px;
+}
+
+/* Landing navbar logo */
+.nav-logo-img {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+}
+
+/* App header logo */
+.brand-logo,
+.header-brand .logo {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-logo-img {
+  width: 42px;
+  height: 42px;
+}
 
 
 /* =========================================================
