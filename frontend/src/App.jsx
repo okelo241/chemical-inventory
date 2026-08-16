@@ -1820,54 +1820,69 @@ function App() {
             <p className="subtitle">Stock • Hazards • SDS • Compatibility</p>
           </div>
         </div>
+
         <div className="header-actions">
-          <div className="notif-wrapper" ref={notifRef}>
-            <button
-              className="icon-btn notif-btn"
-              onClick={() => setNotifOpen((v) => !v)}
-              title="Notifications"
-            >
-              🔔
-              {unreadCount > 0 && <span className="notif-badge">{unreadCount}</span>}
+          {/* Utility icons group */}
+          <div className="header-icons">
+            <div className="notif-wrapper" ref={notifRef}>
+              <button
+                className="icon-btn notif-btn"
+                onClick={() => setNotifOpen((v) => !v)}
+                title="Notifications"
+              >
+                🔔
+                {unreadCount > 0 && <span className="notif-badge">{unreadCount}</span>}
+              </button>
+            </div>
+
+            <button className="icon-btn" onClick={() => setShowHistory(true)} title="Usage History">
+              📋
+            </button>
+
+            <button className="icon-btn" onClick={() => setCompatOpen(true)} title="Compatibility Checker">
+              ⚠️
+              {compatibilityIssues.length > 0 && (
+                <span className="notif-badge">{compatibilityIssues.length}</span>
+              )}
+            </button>
+
+            <button className="icon-btn" onClick={startScanner} title="Scan Barcode / QR">
+              📷
+            </button>
+
+            <button className="icon-btn" onClick={() => setCommandOpen(true)} title="Command palette">
+              ⌘K
+            </button>
+
+            <button className="icon-btn theme-toggle" onClick={toggleTheme} title="Toggle theme">
+              {theme === 'dark' ? '☀️' : '🌙'}
             </button>
           </div>
 
-          <button className="icon-btn" onClick={() => setShowHistory(true)} title="Usage History">
-            📋
-          </button>
-          <button className="icon-btn" onClick={() => setCompatOpen(true)} title="Compatibility Checker">
-            ⚠️
-            {compatibilityIssues.length > 0 && (
-              <span className="notif-badge">{compatibilityIssues.length}</span>
-            )}
-          </button>
-          <button className="icon-btn" onClick={startScanner} title="Scan Barcode / QR">
-            📷
-          </button>
-          <button className="icon-btn" onClick={() => setCommandOpen(true)} title="Command palette">
-            ⌘K
-          </button>
-          <button className="icon-btn theme-toggle" onClick={toggleTheme}>
-            {theme === 'dark' ? '☀️' : '🌙'}
-          </button>
-          <div className="user-chip">
-            <span className="user-email">{session.user?.email}</span>
+          {/* User + actions group */}
+          <div className="header-user-actions">
+            <div className="user-chip">
+              <span className="user-email">{session.user?.email}</span>
+            </div>
+
+            <button className="btn btn-ghost" onClick={() => setShowLanding(true)}>
+              About
+            </button>
+
+            <button className="btn btn-ghost" onClick={handleLogout}>
+              Logout
+            </button>
+
+            <button
+              className="btn btn-primary"
+              onClick={() => {
+                resetForm()
+                setShowForm(true)
+              }}
+            >
+              + Add Chemical
+            </button>
           </div>
-          <button className="btn btn-ghost" onClick={() => setShowLanding(true)}>
-            About
-          </button>
-          <button className="btn btn-ghost" onClick={handleLogout}>
-            Logout
-          </button>
-          <button
-            className="btn btn-primary"
-            onClick={() => {
-              resetForm()
-              setShowForm(true)
-            }}
-          >
-            + Add Chemical
-          </button>
         </div>
       </header>
 
@@ -2285,7 +2300,7 @@ function App() {
                         />
                         <button
                           type="button"
-                          className="btn btn-sm btn-ghost generate-btn"
+                          className="btn btn-sm btn-ghost"
                           onClick={handleGenerateBarcode}
                         >
                           Generate
