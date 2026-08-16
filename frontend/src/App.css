@@ -4285,6 +4285,7 @@ body {
     transition: none !important;
   }
 }
+
 /* ==================== APP LOGO IMAGES ==================== */
 
 .auth-logo-img,
@@ -4294,6 +4295,7 @@ body {
   height: 100%;
   object-fit: contain;
   display: block;
+  border-radius: inherit;
 }
 
 /* Login page logo */
@@ -4305,22 +4307,47 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
-.auth-logo-img {
+.auth-logo .auth-logo-img {
   width: 56px;
   height: 56px;
 }
 
 /* Landing navbar logo */
+.nav-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .nav-logo-img {
   width: 36px;
   height: 36px;
   border-radius: 10px;
+  flex-shrink: 0;
 }
 
-/* App header logo */
-.brand-logo,
+/* App header logo (matches your .brand / .brand-logo structure) */
+.brand-logo {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.25);
+}
+
+.brand-logo .app-logo-img {
+  width: 42px;
+  height: 42px;
+}
+
+/* Fallback if you still use older header classes */
 .header-brand .logo {
   width: 42px;
   height: 42px;
@@ -4329,11 +4356,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.app-logo-img {
-  width: 42px;
-  height: 42px;
+  flex-shrink: 0;
 }
 
 
