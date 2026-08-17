@@ -4336,20 +4336,40 @@ body {
   height: 42px;
 }
 
-.workspace-switcher {
+.workspace-switch {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
-.workspace-switcher select {
-  padding: 6px 10px;
-  border-radius: 10px;
+.workspace-btn {
+  padding: 7px 12px;
+  border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--card);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.workspace-btn:hover {
   color: var(--text);
-  font-size: 0.85rem;
-  max-width: 200px;
+  border-color: #93c5fd;
+}
+
+.workspace-btn.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+}
+
+.workspace-btn.create {
+  border-style: dashed;
 }
 
 /* =========================================================

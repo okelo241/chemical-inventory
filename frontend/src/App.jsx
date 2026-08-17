@@ -802,6 +802,14 @@ function App() {
 
   /* ---------- Organizations / Workspace ---------- */
   const [organizations, setOrganizations] = useState([])
+  const [organizations, setOrganizations] = useState([])
+  const [workspaceMode, setWorkspaceMode] = useState('personal') // 'personal' | 'organization'
+  const [activeOrgId, setActiveOrgId] = useState(null)
+  const [activeOrgName, setActiveOrgName] = useState('')
+  const [activeOrgRole, setActiveOrgRole] = useState(null)
+  const [showCreateOrg, setShowCreateOrg] = useState(false)
+  const [newOrgName, setNewOrgName] = useState('')
+  const [orgLoading, setOrgLoading] = useState(false)
   const [workspace, setWorkspace] = useState(() => {
     try {
       const saved = localStorage.getItem('workspace')
@@ -960,13 +968,13 @@ function App() {
     if (session) {
       fetchOrganizations()
     }
-  }, [session])
+  }, [session, fetchOrganizations])
 
   useEffect(() => {
     if (session) {
       fetchChemicals()
     }
-  }, [session, workspace.mode, workspace.organization_id])
+  }, [session, workspace.mode, workspace.organization_id, activeOrgId, fetchChemicals])
 
   /* ======================================================================== */
   /* BARCODE / QR HANDLERS (MUST stay inside App)                             */
@@ -1247,6 +1255,51 @@ function App() {
     localStorage.setItem('workspace', JSON.stringify(next))
   }
 
+  const switchToPersonal = () => {
+    setWorkspaceMode('personal')
+    setActiveOrgId(null)
+    setActiveOrgName('')
+    setActiveOrgRole(null)
+  }
+
+  const switchToOrganization = (org) => {
+    setWorkspaceMode('organization')
+    setActiveOrgId(org.id)
+    setActiveOrgName(org.name)
+    setActiveOrgRole(org.role || null)
+  }
+
+  const handleCreateOrganization = async () => {
+    const name = newOrgName.trim()
+    if (name.length < 2) {
+      showMessage?.('error', 'Organization name must be at least 2 characters')
+      return
+    }
+    setOrgLoading(true)
+    try {
+      const token = await getAccessToken()
+      const res = await fetch(`${API_URL}/organizations`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name }),
+      })
+      if (!res.ok) throw new Error('Failed to create organization')
+      const org = await res.json()
+      await fetchOrganizations()
+      switchToOrganization(org)
+      setShowCreateOrg(false)
+      setNewOrgName('')
+      showMessage?.('success', `Organization “${org.name}” created`)
+    } catch (err) {
+      showMessage?.('error', err.message || 'Could not create organization')
+    } finally {
+      setOrgLoading(false)
+    }
+  }
+
   const fetchOrganizations = async () => {
     try {
       const token = await getAccessToken()
@@ -1345,7 +1398,7 @@ function App() {
           ? formData.chemical_classes
           : null,
         barcode: formData.barcode.trim() || null,
-        organization_id: activeOrgId || null,
+        organization_id: workspaceMode === 'organization' ? activeOrgId : null,
       }
 
       const url = editingId
@@ -2739,6 +2792,41 @@ function App() {
                     </button>
                   </div>
                 </form>
+              </div>
+            </div>
+          )}
+
+          {showCreateOrg && (
+            <div className="modal-overlay" onClick={() => setShowCreateOrg(false)}>
+              <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h3>Create Organization</h3>
+                  <button className="icon-btn" onClick={() => setShowCreateOrg(false)}>
+                    ✕
+                  </button>
+                </div>
+                <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: 14 }}>
+                  Shared lab inventory for your team. Each member still keeps a personal collection.
+                </p>
+                <input
+                  className="search-input"
+                  placeholder="Organization name (e.g. Organic Lab)"
+                  value={newOrgName}
+                  onChange={(e) => setNewOrgName(e.target.value)}
+                  autoFocus
+                />
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+                  <button className="btn btn-ghost" onClick={() => setShowCreateOrg(false)}>
+                    Cancel
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleCreateOrganization}
+                    disabled={orgLoading}
+                  >
+                    {orgLoading ? 'Creating…' : 'Create'}
+                  </button>
+                </div>
               </div>
             </div>
           )}
