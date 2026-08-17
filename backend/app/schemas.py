@@ -1,9 +1,10 @@
-from pydantic import BaseModel, Field
-from typing import Optional, List
+from pydantic import BaseModel, Field, EmailStr
+from typing import Optional, List, Literal
 from datetime import date, datetime
+from uuid import UUID
 
 
-# ---------- Chemicals (existing + org id) ----------
+# ---------- Chemicals ----------
 
 class ChemicalBase(BaseModel):
     name: str
@@ -20,8 +21,9 @@ class ChemicalBase(BaseModel):
     batch_lot: Optional[str] = None
     supplier: Optional[str] = None
     barcode: Optional[str] = None
+    # kept for backward compatibility; prefer user_collections table
     in_collection: Optional[bool] = False
-    organization_id: Optional[int] = None
+    organization_id: Optional[UUID] = None
 
 
 class ChemicalCreate(ChemicalBase):
@@ -44,13 +46,15 @@ class ChemicalUpdate(BaseModel):
     supplier: Optional[str] = None
     barcode: Optional[str] = None
     in_collection: Optional[bool] = None
-    organization_id: Optional[int] = None
+    organization_id: Optional[UUID] = None
 
 
 class Chemical(ChemicalBase):
     id: int
     sds_filename: Optional[str] = None
     user_id: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -63,10 +67,9 @@ class OrganizationCreate(BaseModel):
 
 
 class OrganizationOut(BaseModel):
-    id: int
+    id: UUID
     name: str
-    slug: Optional[str] = None
-    created_by: str
+    created_by: Optional[str] = None
     created_at: Optional[datetime] = None
     role: Optional[str] = None  # current user's role in this org
 
@@ -75,35 +78,40 @@ class OrganizationOut(BaseModel):
 
 
 class OrganizationMemberOut(BaseModel):
-    id: int
-    organization_id: int
+    id: UUID
+    organization_id: UUID
     user_id: str
     role: str
-    created_at: Optional[datetime] = None
+    joined_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
 
 
 class WorkspaceContext(BaseModel):
-    """What the frontend uses for Personal vs Organization switch."""
-    mode: str  # "personal" | "organization"
-    organization_id: Optional[int] = None
+    """Frontend Personal vs Organization switch."""
+    mode: Literal["personal", "organization"] = "personal"
+    organization_id: Optional[UUID] = None
     organization_name: Optional[str] = None
     role: Optional[str] = None
 
+
+# ---------- Invites ----------
+
 class InviteCreate(BaseModel):
-    email: str
-    role: str = "member"  # member | admin
+    email: EmailStr
+    role: Literal["member", "admin"] = "member"
 
 
 class InviteOut(BaseModel):
-    id: int
-    organization_id: int
+    id: UUID
+    organization_id: UUID
     email: str
     role: str
     status: str
+    token: Optional[str] = None  # return only when creating
     created_at: Optional[datetime] = None
+    accepted_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -111,3 +119,23 @@ class InviteOut(BaseModel):
 
 class AcceptInviteIn(BaseModel):
     token: str
+
+
+# ---------- Personal collection ----------
+
+class CollectionToggle(BaseModel):
+    chemical_id: int
+
+
+class CollectionItemOut(BaseModel):
+    chemical_id: int
+    added_at: Optional[datetime] = None
+    chemical: Optional[Chemical] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CollectionToggleOut(BaseModel):
+    chemical_id: int
+    in_collection: bool

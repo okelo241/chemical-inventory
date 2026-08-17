@@ -25,38 +25,45 @@ class Chemical(Base):
     barcode = Column(String, nullable=True)
     in_collection = Column(Boolean, default=False)
     user_id = Column(String, nullable=True, index=True)
-    # Phase 1: nullable — personal chemicals stay user-scoped
-    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
-
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
 
 class Organization(Base):
     __tablename__ = "organizations"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String, nullable=False)
-    slug = Column(String, unique=True, index=True, nullable=True)
-    created_by = Column(String, nullable=False, index=True)  # Supabase user id
+    created_by = Column(UUID(as_uuid=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class OrganizationMember(Base):
     __tablename__ = "organization_members"
 
-    id = Column(Integer, primary_key=True, index=True)
-    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
-    user_id = Column(String, nullable=False, index=True)  # Supabase user id
-    role = Column(String, default="member")  # owner | admin | member
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    role = Column(String, nullable=False, default="member")  # owner | admin | member
+    joined_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserCollection(Base):
+    __tablename__ = "user_collections"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    chemical_id = Column(Integer, ForeignKey("chemicals.id", ondelete="CASCADE"), nullable=False)
+    added_at = Column(DateTime(timezone=True), server_default=func.now())
+
 
 class OrganizationInvite(Base):
     __tablename__ = "organization_invites"
 
-    id = Column(Integer, primary_key=True, index=True)
-    organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False, index=True)
-    email = Column(String, nullable=False, index=True)
-    role = Column(String, default="member")  # member | admin
-    invited_by = Column(String, nullable=False)
-    token = Column(String, unique=True, nullable=False, index=True)
-    status = Column(String, default="pending")  # pending | accepted | revoked
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    email = Column(String, nullable=False)
+    role = Column(String, nullable=False, default="member")
+    invited_by = Column(UUID(as_uuid=True), nullable=True)
+    token = Column(String, unique=True, nullable=False)
+    status = Column(String, nullable=False, default="pending")  # pending | accepted | revoked
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     accepted_at = Column(DateTime(timezone=True), nullable=True)

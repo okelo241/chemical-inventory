@@ -1,17 +1,16 @@
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Set
 from datetime import datetime, timezone
 import os
 import re
+import secrets
+
 from supabase import create_client, Client
 
 from . import models, schemas
 from .database import engine, get_db
-
-import secrets
-from datetime import datetime, timezone
 
 # Create tables (new columns still need ALTER on an existing DB)
 models.Base.metadata.create_all(bind=engine)
@@ -42,7 +41,7 @@ def _to_dict(obj, exclude_unset: bool = False):
 
 
 def get_current_user_id(authorization: Optional[str] = Header(None)) -> str:
-    """Extract the current user ID from the Supabase access token"""
+    """Extract the current user ID from the Supabase access token."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing authorization token")
 
@@ -61,7 +60,7 @@ def get_current_user_id(authorization: Optional[str] = Header(None)) -> str:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
-# ========== Organization helpers (Phase 1) ==========
+# ========== Organization helpers ==========
 
 def _slugify(name: str) -> str:
     s = re.sub(r"[^a-zA-Z0-9]+", "-", (name or "").strip().lower()).strip("-")
@@ -81,13 +80,20 @@ def get_membership(
     )
 
 
-def user_org_ids(db: Session, user_id: str) -> List[int]:
-    rows = (
-        db.query(models.OrganizationMember.organization_id)
-        .filter(models.OrganizationMember.user_id == user_id)
-        .all()
-    )
-    return [r[0] for r in rows]
+def require_org_role(
+    db: Session, user_id: str, organization_id: int, allowed: Set[str]
+) -> models.OrganizationMember:
+    membership = get_membership(db, user_id, organization_id)
+    if not membership or membership.role not in allowed:
+        raise HTTPException(status_code=403, detail="Insufficient organization permissions")
+    return membership
+
+
+def can_access_chemical(db: Session, user_id: str, chemical: models.Chemical) -> bool:
+    org_id = getattr(chemical, "organization_id", None)
+    if org_id:
+        return get_membership(db, user_id, org_id) is not None
+    return chemical.user_id == user_id
 
 
 @app.get("/")
@@ -106,24 +112,15 @@ def get_chemicals(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    """
-    Personal (default): chemicals for this user.
-    Organization: chemicals for organization_id if the user is a member.
-    """
     q = db.query(models.Chemical)
 
     if organization_id is None:
-        # Keep individual accounts working (same behaviour as before)
+        # Personal workspace — individual accounts keep working
         q = q.filter(models.Chemical.user_id == user_id)
-        # Prefer personal-only rows when organization_id column exists
         if hasattr(models.Chemical, "organization_id"):
-            q = q.filter(
-                (models.Chemical.organization_id.is_(None))
-                | (models.Chemical.organization_id == None)  # noqa: E711
-            )
+            q = q.filter(models.Chemical.organization_id.is_(None))
     else:
-        membership = get_membership(db, user_id, organization_id)
-        if not membership:
+        if not get_membership(db, user_id, organization_id):
             raise HTTPException(status_code=403, detail="Not a member of this organization")
         if not hasattr(models.Chemical, "organization_id"):
             raise HTTPException(
@@ -141,26 +138,10 @@ def get_chemical(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    chemical = (
-        db.query(models.Chemical)
-        .filter(models.Chemical.id == chemical_id)
-        .first()
-    )
-    if not chemical:
+    chemical = db.query(models.Chemical).filter(models.Chemical.id == chemical_id).first()
+    if not chemical or not can_access_chemical(db, user_id, chemical):
         raise HTTPException(status_code=404, detail="Chemical not found")
-
-    # Personal chemical
-    if chemical.user_id == user_id and (
-        not getattr(chemical, "organization_id", None)
-    ):
-        return chemical
-
-    # Org chemical — must be a member
-    org_id = getattr(chemical, "organization_id", None)
-    if org_id and get_membership(db, user_id, org_id):
-        return chemical
-
-    raise HTTPException(status_code=404, detail="Chemical not found")
+    return chemical
 
 
 @app.post("/chemicals", response_model=schemas.Chemical)
@@ -176,7 +157,6 @@ def create_chemical(
         if not get_membership(db, user_id, org_id):
             raise HTTPException(status_code=403, detail="Not a member of this organization")
     else:
-        # Personal chemical
         data["organization_id"] = None
 
     db_chemical = models.Chemical(**data, user_id=user_id)
@@ -193,24 +173,18 @@ def update_chemical(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    db_chemical = (
-        db.query(models.Chemical)
-        .filter(models.Chemical.id == chemical_id)
-        .first()
-    )
-    if not db_chemical:
-        raise HTTPException(status_code=404, detail="Chemical not found")
-
-    org_id = getattr(db_chemical, "organization_id", None)
-    if org_id:
-        if not get_membership(db, user_id, org_id):
-            raise HTTPException(status_code=403, detail="Not a member of this organization")
-    elif db_chemical.user_id != user_id:
+    db_chemical = db.query(models.Chemical).filter(models.Chemical.id == chemical_id).first()
+    if not db_chemical or not can_access_chemical(db, user_id, db_chemical):
         raise HTTPException(status_code=404, detail="Chemical not found")
 
     update_data = _to_dict(chemical, exclude_unset=True)
-    # Do not let clients reassign ownership casually
     update_data.pop("user_id", None)
+
+    # Prevent moving a chemical across workspaces casually
+    if "organization_id" in update_data:
+        new_org = update_data["organization_id"]
+        if new_org is not None and not get_membership(db, user_id, new_org):
+            raise HTTPException(status_code=403, detail="Not a member of target organization")
 
     for key, value in update_data.items():
         setattr(db_chemical, key, value)
@@ -226,20 +200,8 @@ def delete_chemical(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    db_chemical = (
-        db.query(models.Chemical)
-        .filter(models.Chemical.id == chemical_id)
-        .first()
-    )
-    if not db_chemical:
-        raise HTTPException(status_code=404, detail="Chemical not found")
-
-    org_id = getattr(db_chemical, "organization_id", None)
-    if org_id:
-        membership = get_membership(db, user_id, org_id)
-        if not membership:
-            raise HTTPException(status_code=403, detail="Not a member of this organization")
-    elif db_chemical.user_id != user_id:
+    db_chemical = db.query(models.Chemical).filter(models.Chemical.id == chemical_id).first()
+    if not db_chemical or not can_access_chemical(db, user_id, db_chemical):
         raise HTTPException(status_code=404, detail="Chemical not found")
 
     if db_chemical.sds_filename:
@@ -260,19 +222,8 @@ def upload_sds(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    db_chemical = (
-        db.query(models.Chemical)
-        .filter(models.Chemical.id == chemical_id)
-        .first()
-    )
-    if not db_chemical:
-        raise HTTPException(status_code=404, detail="Chemical not found")
-
-    org_id = getattr(db_chemical, "organization_id", None)
-    if org_id:
-        if not get_membership(db, user_id, org_id):
-            raise HTTPException(status_code=403, detail="Not a member of this organization")
-    elif db_chemical.user_id != user_id:
+    db_chemical = db.query(models.Chemical).filter(models.Chemical.id == chemical_id).first()
+    if not db_chemical or not can_access_chemical(db, user_id, db_chemical):
         raise HTTPException(status_code=404, detail="Chemical not found")
 
     file_path = f"{user_id}/{chemical_id}/{file.filename}"
@@ -300,26 +251,85 @@ def get_sds_url(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    chemical = (
-        db.query(models.Chemical)
-        .filter(models.Chemical.id == chemical_id)
-        .first()
-    )
-    if not chemical or not chemical.sds_filename:
-        raise HTTPException(status_code=404, detail="SDS file not found")
-
-    org_id = getattr(chemical, "organization_id", None)
-    if org_id:
-        if not get_membership(db, user_id, org_id):
-            raise HTTPException(status_code=403, detail="Not a member of this organization")
-    elif chemical.user_id != user_id:
+    chemical = db.query(models.Chemical).filter(models.Chemical.id == chemical_id).first()
+    if not chemical or not chemical.sds_filename or not can_access_chemical(db, user_id, chemical):
         raise HTTPException(status_code=404, detail="SDS file not found")
 
     public_url = supabase.storage.from_(BUCKET_NAME).get_public_url(chemical.sds_filename)
     return {"url": public_url}
 
 
-# ========== Organizations (Phase 1) ==========
+# ========== Personal Collection ==========
+
+@app.get("/collections/me", response_model=List[schemas.Chemical])
+def get_my_collection(
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    """Return chemicals in the current user's personal collection."""
+    if not hasattr(models, "UserCollection"):
+        # Fallback for old in_collection flag
+        return (
+            db.query(models.Chemical)
+            .filter(
+                models.Chemical.user_id == user_id,
+                models.Chemical.in_collection.is_(True),
+            )
+            .order_by(models.Chemical.name)
+            .all()
+        )
+
+    return (
+        db.query(models.Chemical)
+        .join(models.UserCollection, models.UserCollection.chemical_id == models.Chemical.id)
+        .filter(models.UserCollection.user_id == user_id)
+        .order_by(models.Chemical.name)
+        .all()
+    )
+
+
+@app.post("/collections/toggle")
+def toggle_collection(
+    payload: schemas.CollectionToggle,
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id),
+):
+    chemical = db.query(models.Chemical).filter(models.Chemical.id == payload.chemical_id).first()
+    if not chemical or not can_access_chemical(db, user_id, chemical):
+        raise HTTPException(status_code=404, detail="Chemical not found")
+
+    # Prefer user_collections table when available
+    if hasattr(models, "UserCollection"):
+        existing = (
+            db.query(models.UserCollection)
+            .filter(
+                models.UserCollection.user_id == user_id,
+                models.UserCollection.chemical_id == payload.chemical_id,
+            )
+            .first()
+        )
+        if existing:
+            db.delete(existing)
+            db.commit()
+            return {"chemical_id": payload.chemical_id, "in_collection": False}
+
+        db.add(
+            models.UserCollection(
+                user_id=user_id,
+                chemical_id=payload.chemical_id,
+            )
+        )
+        db.commit()
+        return {"chemical_id": payload.chemical_id, "in_collection": True}
+
+    # Fallback: boolean column on chemicals
+    chemical.in_collection = not bool(chemical.in_collection)
+    db.commit()
+    db.refresh(chemical)
+    return {"chemical_id": chemical.id, "in_collection": bool(chemical.in_collection)}
+
+
+# ========== Organizations ==========
 
 @app.post("/organizations", response_model=schemas.OrganizationOut)
 def create_organization(
@@ -354,7 +364,7 @@ def create_organization(
     return schemas.OrganizationOut(
         id=org.id,
         name=org.name,
-        slug=org.slug,
+        slug=getattr(org, "slug", None),
         created_by=org.created_by,
         created_at=org.created_at,
         role="owner",
@@ -362,6 +372,7 @@ def create_organization(
 
 
 @app.get("/organizations", response_model=List[schemas.OrganizationOut])
+@app.get("/organizations/me", response_model=List[schemas.OrganizationOut])
 def list_my_organizations(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
@@ -379,7 +390,7 @@ def list_my_organizations(
         schemas.OrganizationOut(
             id=org.id,
             name=org.name,
-            slug=org.slug,
+            slug=getattr(org, "slug", None),
             created_by=org.created_by,
             created_at=org.created_at,
             role=role,
@@ -413,7 +424,6 @@ def get_workspace_hint(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    """Frontend uses this for Personal vs Organization switch."""
     if not organization_id:
         return schemas.WorkspaceContext(mode="personal")
 
@@ -421,11 +431,7 @@ def get_workspace_hint(
     if not membership:
         raise HTTPException(status_code=403, detail="Not a member of this organization")
 
-    org = (
-        db.query(models.Organization)
-        .filter(models.Organization.id == organization_id)
-        .first()
-    )
+    org = db.query(models.Organization).filter(models.Organization.id == organization_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
 
@@ -437,38 +443,7 @@ def get_workspace_hint(
     )
 
 
-# ========== Transactions (optional – stops frontend 404) ==========
-_TRANSACTIONS: list = []
-
-
-@app.get("/transactions")
-def get_transactions(user_id: str = Depends(get_current_user_id)):
-    return [t for t in _TRANSACTIONS if t.get("user_id") == user_id]
-
-
-@app.post("/transactions")
-def create_transaction(
-    payload: dict,
-    user_id: str = Depends(get_current_user_id),
-):
-    row = {
-        "id": f"tx-{len(_TRANSACTIONS) + 1}",
-        "user_id": user_id,
-        **payload,
-    }
-    if "created_at" not in row:
-        row["created_at"] = datetime.now(timezone.utc).isoformat()
-    _TRANSACTIONS.insert(0, row)
-    return row
-
-def require_org_role(
-    db: Session, user_id: str, organization_id: int, allowed: set[str]
-) -> models.OrganizationMember:
-    m = get_membership(db, user_id, organization_id)
-    if not m or m.role not in allowed:
-        raise HTTPException(status_code=403, detail="Insufficient organization permissions")
-    return m
-
+# ========== Invites ==========
 
 @app.post("/organizations/{organization_id}/invites", response_model=schemas.InviteOut)
 def invite_member(
@@ -483,11 +458,10 @@ def invite_member(
     if role not in ("member", "admin"):
         raise HTTPException(status_code=400, detail="role must be member or admin")
 
-    email = payload.email.strip().lower()
+    email = str(payload.email).strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Invalid email")
 
-    # Already a member? (optional: match by email later via profiles table)
     existing_invite = (
         db.query(models.OrganizationInvite)
         .filter(
@@ -512,10 +486,6 @@ def invite_member(
     db.add(invite)
     db.commit()
     db.refresh(invite)
-
-    # Phase 2: return token so you can show/copy invite link.
-    # Later: send email via Supabase/Resend with:
-    #   https://your-app.com/accept-invite?token=...
     return invite
 
 
@@ -551,14 +521,7 @@ def accept_invite(
     if not invite:
         raise HTTPException(status_code=404, detail="Invite not found or already used")
 
-    # Optional: enforce email match if you store user email from JWT/user metadata
-    # For now accept if logged in (simplest Phase 2)
-
-    if get_membership(db, user_id, invite.organization_id):
-        invite.status = "accepted"
-        invite.accepted_at = datetime.now(timezone.utc)
-        db.commit()
-    else:
+    if not get_membership(db, user_id, invite.organization_id):
         db.add(
             models.OrganizationMember(
                 organization_id=invite.organization_id,
@@ -566,20 +529,18 @@ def accept_invite(
                 role=invite.role or "member",
             )
         )
-        invite.status = "accepted"
-        invite.accepted_at = datetime.now(timezone.utc)
-        db.commit()
 
-    org = (
-        db.query(models.Organization)
-        .filter(models.Organization.id == invite.organization_id)
-        .first()
-    )
+    invite.status = "accepted"
+    invite.accepted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    org = db.query(models.Organization).filter(models.Organization.id == invite.organization_id).first()
     membership = get_membership(db, user_id, org.id)
+
     return schemas.OrganizationOut(
         id=org.id,
         name=org.name,
-        slug=org.slug,
+        slug=getattr(org, "slug", None),
         created_by=org.created_by,
         created_at=org.created_at,
         role=membership.role if membership else invite.role,
@@ -604,6 +565,7 @@ def revoke_invite(
     )
     if not invite:
         raise HTTPException(status_code=404, detail="Invite not found")
+
     invite.status = "revoked"
     db.commit()
     return {"message": "Invite revoked"}
@@ -628,3 +590,28 @@ def update_member_role(
     member.role = role
     db.commit()
     return {"message": "Role updated", "user_id": member_user_id, "role": role}
+
+
+# ========== Transactions (optional – stops frontend 404) ==========
+_TRANSACTIONS: list = []
+
+
+@app.get("/transactions")
+def get_transactions(user_id: str = Depends(get_current_user_id)):
+    return [t for t in _TRANSACTIONS if t.get("user_id") == user_id]
+
+
+@app.post("/transactions")
+def create_transaction(
+    payload: dict,
+    user_id: str = Depends(get_current_user_id),
+):
+    row = {
+        "id": f"tx-{len(_TRANSACTIONS) + 1}",
+        "user_id": user_id,
+        **payload,
+    }
+    if "created_at" not in row:
+        row["created_at"] = datetime.now(timezone.utc).isoformat()
+    _TRANSACTIONS.insert(0, row)
+    return row
