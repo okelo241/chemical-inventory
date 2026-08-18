@@ -820,6 +820,12 @@ function App() {
       return { mode: 'personal', organization_id: null }
     }
   })
+  const [showInviteModal, setShowInviteModal] = useState(false)
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteRole, setInviteRole] = useState('member')
+  const [inviteLoading, setInviteLoading] = useState(false)
+  const [orgInvites, setOrgInvites] = useState([])
+  const [orgMembers, setOrgMembers] = useState([])
 
   const activeOrgId =
     workspace.mode === 'organization' ? workspace.organization_id : null
@@ -1249,6 +1255,138 @@ function App() {
       setRefreshing(false)
     }
   }, [API_URL, getAccessToken, showMessage, activeOrgId])
+
+  const fetchOrgMembers = useCallback(async (organizationId) => {
+    if (!organizationId) {
+      setOrgMembers([])
+      return
+    }
+    try {
+      const token = await getAccessToken()
+      const res = await fetch(`${API_URL}/organizations/${organizationId}/members`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) return
+      const data = await res.json()
+      setOrgMembers(Array.isArray(data) ? data : [])
+    } catch (err) {
+      console.warn('fetchOrgMembers error:', err)
+    }
+  }, [API_URL, getAccessToken])
+
+  const fetchOrgInvites = useCallback(async (organizationId) => {
+    if (!organizationId) {
+      setOrgInvites([])
+      return
+    }
+    try {
+      const token = await getAccessToken()
+      const res = await fetch(`${API_URL}/organizations/${organizationId}/invites`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) return
+      const data = await res.json()
+      setOrgInvites(Array.isArray(data) ? data : [])
+    } catch (err) {
+      console.warn('fetchOrgInvites error:', err)
+    }
+  }, [API_URL, getAccessToken])
+
+  const handleInviteMember = async () => {
+    if (!activeOrgId) {
+      showMessage('error', 'Select an organization first')
+      return
+    }
+    const email = inviteEmail.trim().toLowerCase()
+    if (!email || !email.includes('@')) {
+      showMessage('error', 'Enter a valid email')
+      return
+    }
+
+    setInviteLoading(true)
+    try {
+      const token = await getAccessToken()
+      const res = await fetch(`${API_URL}/organizations/${activeOrgId}/invites`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          email,
+          role: inviteRole || 'member',
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || 'Invite failed')
+      }
+      const invite = await res.json()
+      showMessage(
+        'success',
+        `Invite created for ${email}. Token: ${invite.token || 'check invites list'}`
+      )
+      setInviteEmail('')
+      setInviteRole('member')
+      await fetchOrgInvites(activeOrgId)
+    } catch (err) {
+      showMessage('error', err.message || 'Could not create invite')
+    } finally {
+      setInviteLoading(false)
+    }
+  }
+
+  const handleRevokeInvite = async (inviteId) => {
+    if (!activeOrgId) return
+    try {
+      const token = await getAccessToken()
+      const res = await fetch(
+        `${API_URL}/organizations/${activeOrgId}/invites/${inviteId}`,
+        {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      )
+      if (!res.ok) throw new Error('Could not revoke invite')
+      showMessage('success', 'Invite revoked')
+      await fetchOrgInvites(activeOrgId)
+    } catch (err) {
+      showMessage('error', err.message || 'Could not revoke invite')
+    }
+  }
+
+  const handleAcceptInvite = async (tokenValue) => {
+    const clean = (tokenValue || '').trim()
+    if (!clean) {
+      showMessage('error', 'Invite token is required')
+      return
+    }
+    try {
+      const token = await getAccessToken()
+      const res = await fetch(`${API_URL}/invites/accept`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ token: clean }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.detail || 'Could not accept invite')
+      }
+      const org = await res.json()
+      showMessage('success', `Joined ${org.name}`)
+      await fetchOrganizations?.()
+      if (org?.id) {
+        setActiveOrgId?.(org.id)
+        setActiveOrgName?.(org.name)
+        setWorkspaceMode?.('organization')
+      }
+    } catch (err) {
+      showMessage('error', err.message || 'Could not accept invite')
+    }
+  }
 
   const switchWorkspace = (next) => {
     setWorkspace(next)
@@ -2155,6 +2293,16 @@ function App() {
 
             {activeOrgId && (
             <button
+                className="btn btn-ghost"
+                onClick={() => setShowInviteModal(true)}
+                title="Invite members"
+              >
+                Invite
+              </button>
+            )}
+
+            {activeOrgId && (
+            <button
               type="button"
               className="btn btn-sm btn-ghost"
               onClick={() => {
@@ -2826,6 +2974,143 @@ function App() {
                   >
                     {orgLoading ? 'Creating…' : 'Create'}
                   </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showInviteModal && (
+            <div className="modal-overlay" onClick={() => setShowInviteModal(false)}>
+              <div
+                className="modal"
+                style={{ maxWidth: 520 }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="modal-header">
+                  <h3>Invite Members</h3>
+                  <button className="icon-btn" onClick={() => setShowInviteModal(false)}>
+                    ✕
+                  </button>
+                </div>
+
+                <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: 12 }}>
+                  Organization: <strong>{activeOrgName || 'Current org'}</strong>
+                </p>
+
+                <div style={{ display: 'grid', gap: 10, marginBottom: 16 }}>
+                  <input
+                    className="search-input"
+                    placeholder="Email address"
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                  />
+                  <select
+                    className="search-input"
+                    value={inviteRole}
+                    onChange={(e) => setInviteRole(e.target.value)}
+                  >
+                    <option value="member">Member</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleInviteMember}
+                    disabled={inviteLoading}
+                  >
+                    {inviteLoading ? 'Sending…' : 'Create Invite'}
+                  </button>
+                </div>
+
+                <h4 style={{ margin: '8px 0' }}>Pending invites</h4>
+                {orgInvites.filter((i) => i.status === 'pending').length === 0 ? (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No pending invites</p>
+                ) : (
+                  <div style={{ display: 'grid', gap: 8, marginBottom: 16 }}>
+                    {orgInvites
+                      .filter((i) => i.status === 'pending')
+                      .map((invite) => (
+                        <div
+                          key={invite.id}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            gap: 8,
+                            alignItems: 'center',
+                            padding: '8px 10px',
+                            border: '1px solid var(--border)',
+                            borderRadius: 10,
+                          }}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 600 }}>{invite.email}</div>
+                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                              Role: {invite.role}
+                              {invite.token ? ` · token: ${invite.token}` : ''}
+                            </div>
+                          </div>
+                          <button
+                            className="btn-sm btn-danger"
+                            onClick={() => handleRevokeInvite(invite.id)}
+                          >
+                            Revoke
+                          </button>
+                        </div>
+                      ))}
+                  </div>
+                )}
+
+                <h4 style={{ margin: '8px 0' }}>Members</h4>
+                {orgMembers.length === 0 ? (
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No members found</p>
+                ) : (
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {orgMembers.map((m) => (
+                      <div
+                        key={m.id || m.user_id}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          padding: '8px 10px',
+                          border: '1px solid var(--border)',
+                          borderRadius: 10,
+                        }}
+                      >
+                        <span style={{ fontSize: '0.9rem' }}>{m.user_id}</span>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                          {m.role}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    marginTop: 18,
+                    paddingTop: 14,
+                    borderTop: '1px solid var(--border)',
+                  }}
+                >
+                  <h4 style={{ margin: '0 0 8px' }}>Accept invite token</h4>
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: 8 }}>
+                    For testing: paste an invite token here while logged in as the invited user.
+                  </p>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input
+                      className="search-input"
+                      placeholder="Paste invite token"
+                      id="accept-invite-token"
+                    />
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => {
+                        const el = document.getElementById('accept-invite-token')
+                        handleAcceptInvite(el?.value || '')
+                      }}
+                    >
+                      Accept
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
