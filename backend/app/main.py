@@ -105,7 +105,7 @@ def read_root():
 
 @app.get("/chemicals", response_model=List[schemas.Chemical])
 def get_chemicals(
-    organization_id: Optional[int] = Query(
+    organization_id: Optional[str] = Query(
         None,
         description="If set, return org chemicals (member only). If omitted, personal chemicals.",
     ),
@@ -114,21 +114,32 @@ def get_chemicals(
 ):
     q = db.query(models.Chemical)
 
-    if organization_id is None:
-        # Personal workspace — individual accounts keep working
-        q = q.filter(models.Chemical.user_id == user_id)
-        if hasattr(models.Chemical, "organization_id"):
-            q = q.filter(models.Chemical.organization_id.is_(None))
-    else:
-        if not get_membership(db, user_id, organization_id):
-            raise HTTPException(status_code=403, detail="Not a member of this organization")
-        if not hasattr(models.Chemical, "organization_id"):
-            raise HTTPException(
-                status_code=500,
-                detail="organization_id column missing on chemicals — run Phase 1 SQL",
-            )
-        q = q.filter(models.Chemical.organization_id == organization_id)
+    # -------- Personal workspace --------
+    if not organization_id:
+        q = q.filter(models.Chemical.user_id == str(user_id))
 
+        # Soft org filter: only apply if column exists
+        # Do NOT fail if some old rows are odd; personal recovery first
+        try:
+            if hasattr(models.Chemical, "organization_id"):
+                q = q.filter(models.Chemical.organization_id.is_(None))
+        except Exception:
+            pass
+
+        return q.order_by(models.Chemical.name).all()
+
+    # -------- Organization workspace --------
+    membership = get_membership(db, str(user_id), organization_id)
+    if not membership:
+        raise HTTPException(status_code=403, detail="Not a member of this organization")
+
+    if not hasattr(models.Chemical, "organization_id"):
+        raise HTTPException(
+            status_code=500,
+            detail="organization_id column missing on chemicals — run Phase 1 SQL",
+        )
+
+    q = q.filter(models.Chemical.organization_id == organization_id)
     return q.order_by(models.Chemical.name).all()
 
 
