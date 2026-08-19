@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field, EmailStr
-from typing import Optional, List, Literal
+from pydantic import BaseModel, Field, EmailStr, ConfigDict
+from typing import Optional, List, Literal, Union
 from datetime import date, datetime
 from uuid import UUID
 
@@ -21,8 +21,9 @@ class ChemicalBase(BaseModel):
     batch_lot: Optional[str] = None
     supplier: Optional[str] = None
     barcode: Optional[str] = None
-    # kept for backward compatibility; prefer user_collections table
+    # Legacy flag; prefer user_collections table when available
     in_collection: Optional[bool] = False
+    # None = personal workspace chemical; set = org workspace chemical
     organization_id: Optional[UUID] = None
 
 
@@ -56,8 +57,7 @@ class Chemical(ChemicalBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ---------- Organizations ----------
@@ -69,12 +69,13 @@ class OrganizationCreate(BaseModel):
 class OrganizationOut(BaseModel):
     id: UUID
     name: str
+    slug: Optional[str] = None
     created_by: Optional[str] = None
     created_at: Optional[datetime] = None
-    role: Optional[str] = None  # current user's role in this org
+    # Role of the *current* user in this org (from join), not a DB column on Organization
+    role: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class OrganizationMemberOut(BaseModel):
@@ -84,8 +85,7 @@ class OrganizationMemberOut(BaseModel):
     role: str
     joined_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WorkspaceContext(BaseModel):
@@ -108,17 +108,17 @@ class InviteOut(BaseModel):
     organization_id: UUID
     email: str
     role: str
-    status: str
-    token: Optional[str] = None  # return only when creating
+    status: str  # pending | accepted | revoked
+    token: Optional[str] = None  # returned so frontend can build /?token=...
+    invited_by: Optional[str] = None
     created_at: Optional[datetime] = None
     accepted_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AcceptInviteIn(BaseModel):
-    token: str
+    token: str = Field(..., min_length=8)
 
 
 # ---------- Personal collection ----------
@@ -132,8 +132,7 @@ class CollectionItemOut(BaseModel):
     added_at: Optional[datetime] = None
     chemical: Optional[Chemical] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CollectionToggleOut(BaseModel):

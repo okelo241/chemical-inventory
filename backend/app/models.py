@@ -25,7 +25,7 @@ class Organization(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String, nullable=False)
     slug = Column(String, unique=True, nullable=True, index=True)
-    created_by = Column(String, nullable=True, index=True)  # auth user id as string
+    created_by = Column(String, nullable=True, index=True)  # Supabase auth user id
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -42,7 +42,7 @@ class OrganizationMember(Base):
         nullable=False,
         index=True,
     )
-    user_id = Column(String, nullable=False, index=True)  # auth user id as string
+    user_id = Column(String, nullable=False, index=True)  # Supabase auth user id
     role = Column(String, nullable=False, default="member")  # owner | admin | member
     joined_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -66,8 +66,14 @@ class Chemical(Base):
     batch_lot = Column(String, nullable=True)
     supplier = Column(String, nullable=True)
     barcode = Column(String, nullable=True)
-    in_collection = Column(Boolean, default=False)  # legacy; prefer user_collections
+
+    # Legacy collection flag (JSX still toggles this via PUT /chemicals/{id})
+    in_collection = Column(Boolean, default=False)
+
+    # Personal owner (Supabase auth user id)
     user_id = Column(String, nullable=True, index=True)
+
+    # None = personal workspace; set = organization workspace
     organization_id = Column(
         UUID(as_uuid=True),
         ForeignKey("organizations.id", ondelete="CASCADE"),
@@ -75,8 +81,17 @@ class Chemical(Base):
         index=True,
     )
 
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
 
 class UserCollection(Base):
+    """Preferred personal collection table (per-user, not per-chemical row)."""
+
     __tablename__ = "user_collections"
     __table_args__ = (
         UniqueConstraint("user_id", "chemical_id", name="uq_user_chemical_collection"),
@@ -105,12 +120,20 @@ class OrganizationInvite(Base):
     )
     email = Column(String, nullable=False, index=True)
     role = Column(String, nullable=False, default="member")  # member | admin
-    invited_by = Column(String, nullable=True)
+    invited_by = Column(String, nullable=True)  # Supabase auth user id
     token = Column(String, unique=True, nullable=False, index=True)
-    status = Column(String, nullable=False, default="pending")  # pending | accepted | revoked
+    status = Column(
+        String, nullable=False, default="pending"
+    )  # pending | accepted | revoked
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     accepted_at = Column(DateTime(timezone=True), nullable=True)
 
 
-# Optional helper indexes
+# Helpful indexes
 Index("idx_chemicals_user_org", Chemical.user_id, Chemical.organization_id)
+Index(
+    "idx_invites_org_email_status",
+    OrganizationInvite.organization_id,
+    OrganizationInvite.email,
+    OrganizationInvite.status,
+)

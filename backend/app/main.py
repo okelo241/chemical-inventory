@@ -1,8 +1,9 @@
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Any
 from datetime import datetime, timezone
+from uuid import UUID
 import os
 import re
 import secrets
@@ -12,55 +13,85 @@ from supabase import create_client, Client
 from . import models, schemas
 from .database import engine, get_db
 
-# Create tables (new columns still need ALTER on an existing DB)
-models.Base.metadata.create_all(bind=engine)
+# Create tables (existing DB may still need ALTER for new columns)
+try:
+    models.Base.metadata.create_all(bind=engine)
+except Exception as e:
+    print("create_all warning:", e)
 
 app = FastAPI(title="Chemical Inventory API")
 
+# ---- CORS (Vercel frontend + local Vite) ----
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://chemical-inventory-zihn.vercel.app",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "*",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ========== Supabase Configuration ==========
+# ========== Supabase ==========
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://qgdtkwhgszvcywsnuyff.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_KEY")
+
+if not SUPABASE_KEY:
+    print("WARNING: SUPABASE_SERVICE_KEY is missing")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_KEY else None
 BUCKET_NAME = "sds-files"
-# ===========================================
 
 
 def _to_dict(obj, exclude_unset: bool = False):
-    """Works with both Pydantic v1 (.dict) and v2 (.model_dump)."""
     if hasattr(obj, "model_dump"):
         return obj.model_dump(exclude_unset=exclude_unset)
     return obj.dict(exclude_unset=exclude_unset)
 
 
+def _as_str(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _parse_uuid(value: Any) -> Optional[UUID]:
+    """Accept UUID objects or strings from query/body/frontend localStorage."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, UUID):
+        return value
+    try:
+        return UUID(str(value))
+    except Exception:
+        return None
+
+
 def get_current_user_id(authorization: Optional[str] = Header(None)) -> str:
-    """Extract the current user ID from the Supabase access token."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing authorization token")
 
-    token = authorization.replace("Bearer ", "")
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="Supabase is not configured")
 
+    token = authorization.replace("Bearer ", "").strip()
     try:
         user_response = supabase.auth.get_user(token)
         user = user_response.user
-
         if not user or not user.id:
             raise HTTPException(status_code=401, detail="Invalid token")
-
         return str(user.id)
+    except HTTPException:
+        raise
     except Exception as e:
         print("Auth error:", str(e))
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
-# ========== Organization helpers ==========
+# ========== Org helpers ==========
 
 def _slugify(name: str) -> str:
     s = re.sub(r"[^a-zA-Z0-9]+", "-", (name or "").strip().lower()).strip("-")
@@ -68,20 +99,23 @@ def _slugify(name: str) -> str:
 
 
 def get_membership(
-    db: Session, user_id: str, organization_id: int
+    db: Session, user_id: str, organization_id: Any
 ) -> Optional[models.OrganizationMember]:
+    org_uuid = _parse_uuid(organization_id)
+    if org_uuid is None:
+        return None
     return (
         db.query(models.OrganizationMember)
         .filter(
-            models.OrganizationMember.user_id == user_id,
-            models.OrganizationMember.organization_id == organization_id,
+            models.OrganizationMember.user_id == str(user_id),
+            models.OrganizationMember.organization_id == org_uuid,
         )
         .first()
     )
 
 
 def require_org_role(
-    db: Session, user_id: str, organization_id: int, allowed: Set[str]
+    db: Session, user_id: str, organization_id: Any, allowed: Set[str]
 ) -> models.OrganizationMember:
     membership = get_membership(db, user_id, organization_id)
     if not membership or membership.role not in allowed:
@@ -93,7 +127,7 @@ def can_access_chemical(db: Session, user_id: str, chemical: models.Chemical) ->
     org_id = getattr(chemical, "organization_id", None)
     if org_id:
         return get_membership(db, user_id, org_id) is not None
-    return chemical.user_id == user_id
+    return str(chemical.user_id) == str(user_id)
 
 
 @app.get("/")
@@ -101,46 +135,51 @@ def read_root():
     return {"message": "Chemical Inventory API is running"}
 
 
+@app.get("/health")
+def health():
+    return {"ok": True}
+
+
 # ========== Chemicals ==========
 
 @app.get("/chemicals", response_model=List[schemas.Chemical])
 def get_chemicals(
-    organization_id: Optional[str] = Query(
-        None,
-        description="If set, return org chemicals (member only). If omitted, personal chemicals.",
-    ),
+    organization_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    q = db.query(models.Chemical)
+    """
+    Personal workspace: no organization_id (or empty) → user's personal chemicals.
+    Organization workspace: organization_id → org chemicals (member only).
+    Matches JSX: fetch(`${API_URL}/chemicals?organization_id=${activeOrgId}`)
+    """
+    try:
+        org_uuid = _parse_uuid(organization_id)
 
-    # -------- Personal workspace --------
-    if not organization_id:
-        q = q.filter(models.Chemical.user_id == str(user_id))
-
-        # Soft org filter: only apply if column exists
-        # Do NOT fail if some old rows are odd; personal recovery first
-        try:
-            if hasattr(models.Chemical, "organization_id"):
+        # Personal workspace
+        if org_uuid is None:
+            q = db.query(models.Chemical).filter(models.Chemical.user_id == str(user_id))
+            try:
                 q = q.filter(models.Chemical.organization_id.is_(None))
-        except Exception:
-            pass
+            except Exception as e:
+                print("personal org filter skipped:", e)
+            return q.order_by(models.Chemical.name).all()
 
-        return q.order_by(models.Chemical.name).all()
+        # Organization workspace
+        if not get_membership(db, user_id, org_uuid):
+            raise HTTPException(status_code=403, detail="Not a member of this organization")
 
-    # -------- Organization workspace --------
-    membership = get_membership(db, str(user_id), organization_id)
-    if not membership:
-        raise HTTPException(status_code=403, detail="Not a member of this organization")
-
-    if not hasattr(models.Chemical, "organization_id"):
-        raise HTTPException(
-            status_code=500,
-            detail="organization_id column missing on chemicals — run Phase 1 SQL",
+        return (
+            db.query(models.Chemical)
+            .filter(models.Chemical.organization_id == org_uuid)
+            .order_by(models.Chemical.name)
+            .all()
         )
-
-    q = q.filter(models.Chemical.organization_id == organization_id)
-    return q.order_by(models.Chemical.name).all()
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("GET /chemicals error:", repr(e))
+        raise HTTPException(status_code=500, detail=f"Could not load chemicals: {e}")
 
 
 @app.get("/chemicals/{chemical_id}", response_model=schemas.Chemical)
@@ -162,15 +201,16 @@ def create_chemical(
     user_id: str = Depends(get_current_user_id),
 ):
     data = _to_dict(chemical)
+    org_uuid = _parse_uuid(data.get("organization_id"))
 
-    org_id = data.get("organization_id")
-    if org_id is not None:
-        if not get_membership(db, user_id, org_id):
+    if org_uuid is not None:
+        if not get_membership(db, user_id, org_uuid):
             raise HTTPException(status_code=403, detail="Not a member of this organization")
+        data["organization_id"] = org_uuid
     else:
         data["organization_id"] = None
 
-    db_chemical = models.Chemical(**data, user_id=user_id)
+    db_chemical = models.Chemical(**data, user_id=str(user_id))
     db.add(db_chemical)
     db.commit()
     db.refresh(db_chemical)
@@ -191,9 +231,9 @@ def update_chemical(
     update_data = _to_dict(chemical, exclude_unset=True)
     update_data.pop("user_id", None)
 
-    # Prevent moving a chemical across workspaces casually
     if "organization_id" in update_data:
-        new_org = update_data["organization_id"]
+        new_org = _parse_uuid(update_data.get("organization_id"))
+        update_data["organization_id"] = new_org
         if new_org is not None and not get_membership(db, user_id, new_org):
             raise HTTPException(status_code=403, detail="Not a member of target organization")
 
@@ -215,7 +255,7 @@ def delete_chemical(
     if not db_chemical or not can_access_chemical(db, user_id, db_chemical):
         raise HTTPException(status_code=404, detail="Chemical not found")
 
-    if db_chemical.sds_filename:
+    if db_chemical.sds_filename and supabase is not None:
         try:
             supabase.storage.from_(BUCKET_NAME).remove([db_chemical.sds_filename])
         except Exception:
@@ -233,6 +273,9 @@ def upload_sds(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="Supabase is not configured")
+
     db_chemical = db.query(models.Chemical).filter(models.Chemical.id == chemical_id).first()
     if not db_chemical or not can_access_chemical(db, user_id, db_chemical):
         raise HTTPException(status_code=404, detail="Chemical not found")
@@ -244,7 +287,10 @@ def upload_sds(
         supabase.storage.from_(BUCKET_NAME).upload(
             path=file_path,
             file=file_content,
-            file_options={"content-type": file.content_type, "upsert": "true"},
+            file_options={
+                "content-type": file.content_type or "application/pdf",
+                "upsert": "true",
+            },
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
@@ -252,7 +298,6 @@ def upload_sds(
     db_chemical.sds_filename = file_path
     db.commit()
     db.refresh(db_chemical)
-
     return {"message": "SDS uploaded successfully", "filename": file_path}
 
 
@@ -262,6 +307,9 @@ def get_sds_url(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
+    if supabase is None:
+        raise HTTPException(status_code=500, detail="Supabase is not configured")
+
     chemical = db.query(models.Chemical).filter(models.Chemical.id == chemical_id).first()
     if not chemical or not chemical.sds_filename or not can_access_chemical(db, user_id, chemical):
         raise HTTPException(status_code=404, detail="SDS file not found")
@@ -270,30 +318,33 @@ def get_sds_url(
     return {"url": public_url}
 
 
-# ========== Personal Collection ==========
+# ========== Collections ==========
+# JSX currently toggles via PUT /chemicals/{id} { in_collection }.
+# These routes remain for a cleaner dedicated API.
 
 @app.get("/collections/me", response_model=List[schemas.Chemical])
 def get_my_collection(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    """Return chemicals in the current user's personal collection."""
-    if not hasattr(models, "UserCollection"):
-        # Fallback for old in_collection flag
+    if hasattr(models, "UserCollection"):
         return (
             db.query(models.Chemical)
-            .filter(
-                models.Chemical.user_id == user_id,
-                models.Chemical.in_collection.is_(True),
+            .join(
+                models.UserCollection,
+                models.UserCollection.chemical_id == models.Chemical.id,
             )
+            .filter(models.UserCollection.user_id == str(user_id))
             .order_by(models.Chemical.name)
             .all()
         )
 
     return (
         db.query(models.Chemical)
-        .join(models.UserCollection, models.UserCollection.chemical_id == models.Chemical.id)
-        .filter(models.UserCollection.user_id == user_id)
+        .filter(
+            models.Chemical.user_id == str(user_id),
+            models.Chemical.in_collection.is_(True),
+        )
         .order_by(models.Chemical.name)
         .all()
     )
@@ -309,12 +360,11 @@ def toggle_collection(
     if not chemical or not can_access_chemical(db, user_id, chemical):
         raise HTTPException(status_code=404, detail="Chemical not found")
 
-    # Prefer user_collections table when available
     if hasattr(models, "UserCollection"):
         existing = (
             db.query(models.UserCollection)
             .filter(
-                models.UserCollection.user_id == user_id,
+                models.UserCollection.user_id == str(user_id),
                 models.UserCollection.chemical_id == payload.chemical_id,
             )
             .first()
@@ -326,15 +376,14 @@ def toggle_collection(
 
         db.add(
             models.UserCollection(
-                user_id=user_id,
+                user_id=str(user_id),
                 chemical_id=payload.chemical_id,
             )
         )
         db.commit()
         return {"chemical_id": payload.chemical_id, "in_collection": True}
 
-    # Fallback: boolean column on chemicals
-    chemical.in_collection = not bool(chemical.in_collection)
+    chemical.in_collection = not bool(getattr(chemical, "in_collection", False))
     db.commit()
     db.refresh(chemical)
     return {"chemical_id": chemical.id, "in_collection": bool(chemical.in_collection)}
@@ -348,38 +397,53 @@ def create_organization(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    base_slug = _slugify(payload.name)
-    slug = base_slug
-    n = 1
-    while db.query(models.Organization).filter(models.Organization.slug == slug).first():
-        n += 1
-        slug = f"{base_slug}-{n}"
+    """Matches JSX: POST /organizations { name } then switchWorkspace to new org."""
+    try:
+        base_slug = _slugify(payload.name)
+        slug = base_slug
+        n = 1
+        if hasattr(models.Organization, "slug"):
+            while (
+                db.query(models.Organization)
+                .filter(models.Organization.slug == slug)
+                .first()
+            ):
+                n += 1
+                slug = f"{base_slug}-{n}"
 
-    org = models.Organization(
-        name=payload.name.strip(),
-        slug=slug,
-        created_by=user_id,
-    )
-    db.add(org)
-    db.flush()
+        org_kwargs = {
+            "name": payload.name.strip(),
+            "created_by": str(user_id),
+        }
+        if hasattr(models.Organization, "slug"):
+            org_kwargs["slug"] = slug
 
-    member = models.OrganizationMember(
-        organization_id=org.id,
-        user_id=user_id,
-        role="owner",
-    )
-    db.add(member)
-    db.commit()
-    db.refresh(org)
+        org = models.Organization(**org_kwargs)
+        db.add(org)
+        db.flush()
 
-    return schemas.OrganizationOut(
-        id=org.id,
-        name=org.name,
-        slug=getattr(org, "slug", None),
-        created_by=org.created_by,
-        created_at=org.created_at,
-        role="owner",
-    )
+        db.add(
+            models.OrganizationMember(
+                organization_id=org.id,
+                user_id=str(user_id),
+                role="owner",
+            )
+        )
+        db.commit()
+        db.refresh(org)
+
+        return schemas.OrganizationOut(
+            id=org.id,
+            name=org.name,
+            slug=getattr(org, "slug", None),
+            created_by=str(org.created_by) if org.created_by else None,
+            created_at=org.created_at,
+            role="owner",
+        )
+    except Exception as e:
+        db.rollback()
+        print("POST /organizations error:", repr(e))
+        raise HTTPException(status_code=500, detail=f"Could not create organization: {e}")
 
 
 @app.get("/organizations", response_model=List[schemas.OrganizationOut])
@@ -388,26 +452,31 @@ def list_my_organizations(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    rows = (
-        db.query(models.Organization, models.OrganizationMember.role)
-        .join(
-            models.OrganizationMember,
-            models.OrganizationMember.organization_id == models.Organization.id,
+    """Matches JSX workspace dropdown: GET /organizations."""
+    try:
+        rows = (
+            db.query(models.Organization, models.OrganizationMember.role)
+            .join(
+                models.OrganizationMember,
+                models.OrganizationMember.organization_id == models.Organization.id,
+            )
+            .filter(models.OrganizationMember.user_id == str(user_id))
+            .all()
         )
-        .filter(models.OrganizationMember.user_id == user_id)
-        .all()
-    )
-    return [
-        schemas.OrganizationOut(
-            id=org.id,
-            name=org.name,
-            slug=getattr(org, "slug", None),
-            created_by=org.created_by,
-            created_at=org.created_at,
-            role=role,
-        )
-        for org, role in rows
-    ]
+        return [
+            schemas.OrganizationOut(
+                id=org.id,
+                name=org.name,
+                slug=getattr(org, "slug", None),
+                created_by=str(org.created_by) if org.created_by else None,
+                created_at=org.created_at,
+                role=role,
+            )
+            for org, role in rows
+        ]
+    except Exception as e:
+        print("GET /organizations error:", repr(e))
+        return []
 
 
 @app.get(
@@ -415,34 +484,37 @@ def list_my_organizations(
     response_model=List[schemas.OrganizationMemberOut],
 )
 def list_org_members(
-    organization_id: int,
+    organization_id: str,
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    if not get_membership(db, user_id, organization_id):
+    org_uuid = _parse_uuid(organization_id)
+    if org_uuid is None:
+        raise HTTPException(status_code=400, detail="Invalid organization_id")
+    if not get_membership(db, user_id, org_uuid):
         raise HTTPException(status_code=403, detail="Not a member of this organization")
-
     return (
         db.query(models.OrganizationMember)
-        .filter(models.OrganizationMember.organization_id == organization_id)
+        .filter(models.OrganizationMember.organization_id == org_uuid)
         .all()
     )
 
 
 @app.get("/workspace", response_model=schemas.WorkspaceContext)
 def get_workspace_hint(
-    organization_id: Optional[int] = Query(None),
+    organization_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    if not organization_id:
+    org_uuid = _parse_uuid(organization_id)
+    if org_uuid is None:
         return schemas.WorkspaceContext(mode="personal")
 
-    membership = get_membership(db, user_id, organization_id)
+    membership = get_membership(db, user_id, org_uuid)
     if not membership:
         raise HTTPException(status_code=403, detail="Not a member of this organization")
 
-    org = db.query(models.Organization).filter(models.Organization.id == organization_id).first()
+    org = db.query(models.Organization).filter(models.Organization.id == org_uuid).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
 
@@ -454,16 +526,23 @@ def get_workspace_hint(
     )
 
 
-# ========== Invites ==========
+# ========== Invites (matches JSX invite modal + ?token= accept) ==========
 
-@app.post("/organizations/{organization_id}/invites", response_model=schemas.InviteOut)
+@app.post(
+    "/organizations/{organization_id}/invites",
+    response_model=schemas.InviteOut,
+)
 def invite_member(
-    organization_id: int,
+    organization_id: str,
     payload: schemas.InviteCreate,
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    require_org_role(db, user_id, organization_id, {"owner", "admin"})
+    org_uuid = _parse_uuid(organization_id)
+    if org_uuid is None:
+        raise HTTPException(status_code=400, detail="Invalid organization_id")
+
+    require_org_role(db, user_id, org_uuid, {"owner", "admin"})
 
     role = (payload.role or "member").lower()
     if role not in ("member", "admin"):
@@ -473,10 +552,11 @@ def invite_member(
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Invalid email")
 
+    # Reuse existing pending invite for same email
     existing_invite = (
         db.query(models.OrganizationInvite)
         .filter(
-            models.OrganizationInvite.organization_id == organization_id,
+            models.OrganizationInvite.organization_id == org_uuid,
             models.OrganizationInvite.email == email,
             models.OrganizationInvite.status == "pending",
         )
@@ -485,13 +565,12 @@ def invite_member(
     if existing_invite:
         return existing_invite
 
-    token = secrets.token_urlsafe(32)
     invite = models.OrganizationInvite(
-        organization_id=organization_id,
+        organization_id=org_uuid,
         email=email,
         role=role,
-        invited_by=user_id,
-        token=token,
+        invited_by=str(user_id),
+        token=secrets.token_urlsafe(32),
         status="pending",
     )
     db.add(invite)
@@ -500,16 +579,23 @@ def invite_member(
     return invite
 
 
-@app.get("/organizations/{organization_id}/invites", response_model=List[schemas.InviteOut])
+@app.get(
+    "/organizations/{organization_id}/invites",
+    response_model=List[schemas.InviteOut],
+)
 def list_invites(
-    organization_id: int,
+    organization_id: str,
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    require_org_role(db, user_id, organization_id, {"owner", "admin"})
+    org_uuid = _parse_uuid(organization_id)
+    if org_uuid is None:
+        raise HTTPException(status_code=400, detail="Invalid organization_id")
+
+    require_org_role(db, user_id, org_uuid, {"owner", "admin"})
     return (
         db.query(models.OrganizationInvite)
-        .filter(models.OrganizationInvite.organization_id == organization_id)
+        .filter(models.OrganizationInvite.organization_id == org_uuid)
         .order_by(models.OrganizationInvite.created_at.desc())
         .all()
     )
@@ -521,10 +607,19 @@ def accept_invite(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
+    """
+    Matches JSX:
+    - Auto-accept on load when URL has ?token=...
+    - Manual accept from invite modal
+    """
+    token = (payload.token or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="token is required")
+
     invite = (
         db.query(models.OrganizationInvite)
         .filter(
-            models.OrganizationInvite.token == payload.token,
+            models.OrganizationInvite.token == token,
             models.OrganizationInvite.status == "pending",
         )
         .first()
@@ -536,7 +631,7 @@ def accept_invite(
         db.add(
             models.OrganizationMember(
                 organization_id=invite.organization_id,
-                user_id=user_id,
+                user_id=str(user_id),
                 role=invite.role or "member",
             )
         )
@@ -545,32 +640,44 @@ def accept_invite(
     invite.accepted_at = datetime.now(timezone.utc)
     db.commit()
 
-    org = db.query(models.Organization).filter(models.Organization.id == invite.organization_id).first()
+    org = (
+        db.query(models.Organization)
+        .filter(models.Organization.id == invite.organization_id)
+        .first()
+    )
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
     membership = get_membership(db, user_id, org.id)
 
     return schemas.OrganizationOut(
         id=org.id,
         name=org.name,
         slug=getattr(org, "slug", None),
-        created_by=org.created_by,
+        created_by=str(org.created_by) if org.created_by else None,
         created_at=org.created_at,
-        role=membership.role if membership else invite.role,
+        role=membership.role if membership else (invite.role or "member"),
     )
 
 
 @app.delete("/organizations/{organization_id}/invites/{invite_id}")
 def revoke_invite(
-    organization_id: int,
-    invite_id: int,
+    organization_id: str,
+    invite_id: str,
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    require_org_role(db, user_id, organization_id, {"owner", "admin"})
+    org_uuid = _parse_uuid(organization_id)
+    invite_uuid = _parse_uuid(invite_id)
+    if org_uuid is None or invite_uuid is None:
+        raise HTTPException(status_code=400, detail="Invalid id")
+
+    require_org_role(db, user_id, org_uuid, {"owner", "admin"})
     invite = (
         db.query(models.OrganizationInvite)
         .filter(
-            models.OrganizationInvite.id == invite_id,
-            models.OrganizationInvite.organization_id == organization_id,
+            models.OrganizationInvite.id == invite_uuid,
+            models.OrganizationInvite.organization_id == org_uuid,
         )
         .first()
     )
@@ -584,17 +691,21 @@ def revoke_invite(
 
 @app.patch("/organizations/{organization_id}/members/{member_user_id}")
 def update_member_role(
-    organization_id: int,
+    organization_id: str,
     member_user_id: str,
     role: str = Query(...),
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    require_org_role(db, user_id, organization_id, {"owner"})
+    org_uuid = _parse_uuid(organization_id)
+    if org_uuid is None:
+        raise HTTPException(status_code=400, detail="Invalid organization_id")
+
+    require_org_role(db, user_id, org_uuid, {"owner"})
     if role not in ("member", "admin", "owner"):
         raise HTTPException(status_code=400, detail="Invalid role")
 
-    member = get_membership(db, member_user_id, organization_id)
+    member = get_membership(db, member_user_id, org_uuid)
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
 
@@ -603,7 +714,7 @@ def update_member_role(
     return {"message": "Role updated", "user_id": member_user_id, "role": role}
 
 
-# ========== Transactions (optional – stops frontend 404) ==========
+# ========== Transactions (in-memory fallback — matches JSX usage log) ==========
 _TRANSACTIONS: list = []
 
 
@@ -613,10 +724,7 @@ def get_transactions(user_id: str = Depends(get_current_user_id)):
 
 
 @app.post("/transactions")
-def create_transaction(
-    payload: dict,
-    user_id: str = Depends(get_current_user_id),
-):
+def create_transaction(payload: dict, user_id: str = Depends(get_current_user_id)):
     row = {
         "id": f"tx-{len(_TRANSACTIONS) + 1}",
         "user_id": user_id,

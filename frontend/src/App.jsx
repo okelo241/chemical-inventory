@@ -22,11 +22,14 @@
  * - Chemical class system (expanded Stanford/NIH-style groups)
  * - Class-based compatibility checker (classes + GHS + name heuristics)
  * - Expanded GHS pictograms (local assets)
- * - PubChem lookup (formula enrichment)
+ * - PubChem lookup + auto-enrichment (formula from name/CAS, debounced)
  * - Auto-classification of chemicals from name + hazards
  * - Barcode / QR generate, display, and camera scan
  * - Idle auto-logout
  * - Landing page preview without logging out
+ * - Personal / Organization workspace switch (individual accounts kept)
+ * - Organization invites + member management
+ * - Header overflow menu (⋯) for secondary actions
  *
  * SAFETY NOTE:
  * Compatibility rules are based on common university EHS storage-group
@@ -490,15 +493,39 @@ const resolveEffectiveClasses = (chemical) => {
 /* SECTION 7 — PUBCHEM LOOKUP                                                 */
 /* ========================================================================== */
 
+/**
+ * Lookup a compound on PubChem by name or CAS number.
+ * Returns { molecular_formula, iupac_name, cid } or null.
+ * Prefers CAS-style queries when the string looks like a CAS RN.
+ */
 const lookupPubChem = async (query) => {
   if (!query || typeof query !== 'string' || query.trim().length < 2) return null
   const cleaned = query.trim()
+
+  // Detect simple CAS pattern (e.g. 7722-84-1)
+  const looksLikeCas = /^\d{2,7}-\d{2}-\d$/.test(cleaned)
+
+  const tryFetchCid = async (path) => {
+    const url = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/${path}/cids/JSON`
+    const res = await fetch(url)
+    if (!res.ok) return null
+    const data = await res.json()
+    return data?.IdentifierList?.CID?.[0] || null
+  }
+
   try {
-    const searchUrl = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/${encodeURIComponent(cleaned)}/cids/JSON`
-    const searchResponse = await fetch(searchUrl)
-    if (!searchResponse.ok) return null
-    const searchData = await searchResponse.json()
-    const cid = searchData?.IdentifierList?.CID?.[0]
+    let cid = null
+
+    if (looksLikeCas) {
+      // Prefer name endpoint first (PubChem accepts CAS there), then xref/RN
+      cid = await tryFetchCid(`compound/name/${encodeURIComponent(cleaned)}`)
+      if (!cid) {
+        cid = await tryFetchCid(`compound/xref/RN/${encodeURIComponent(cleaned)}`)
+      }
+    } else {
+      cid = await tryFetchCid(`compound/name/${encodeURIComponent(cleaned)}`)
+    }
+
     if (!cid) return null
 
     const propUrl = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/property/MolecularFormula,IUPACName,Title/JSON`
@@ -758,6 +785,7 @@ function App() {
   const [bulkMode, setBulkMode] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [compatOpen, setCompatOpen] = useState(false)
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false)
   const [locationFilter, setLocationFilter] = useState('')
   const [hazardFilter, setHazardFilter] = useState('')
 
@@ -802,7 +830,6 @@ function App() {
 
   /* ---------- Organizations / Workspace ---------- */
   const [organizations, setOrganizations] = useState([])
-  const [organizations, setOrganizations] = useState([])
   const [workspaceMode, setWorkspaceMode] = useState('personal') // 'personal' | 'organization'
   const [activeOrgId, setActiveOrgId] = useState(null)
   const [activeOrgName, setActiveOrgName] = useState('')
@@ -827,9 +854,6 @@ function App() {
   const [orgInvites, setOrgInvites] = useState([])
   const [orgMembers, setOrgMembers] = useState([])
 
-  const activeOrgId =
-    workspace.mode === 'organization' ? workspace.organization_id : null
-
   /* ---------- Refs ---------- */
   const searchRef = useRef(null)
   const formRef = useRef(null)
@@ -838,6 +862,8 @@ function App() {
   const exportRef = useRef(null)
   const html5QrCodeRef = useRef(null)
   const idleTimerRef = useRef(null)
+  const headerMenuRef = useRef(null)
+  const pubChemAbortRef = useRef(0) // increments to cancel stale auto-lookups
 
   const API_URL = import.meta.env.VITE_API_URL
 
@@ -1388,23 +1414,43 @@ function App() {
     }
   }
 
+  /**
+   * Single source of truth for workspace switching.
+   * Keeps personal accounts working and syncs org state used by API calls.
+   */
   const switchWorkspace = (next) => {
-    setWorkspace(next)
-    localStorage.setItem('workspace', JSON.stringify(next))
+    const normalized = next || { mode: 'personal', organization_id: null }
+    setWorkspace(normalized)
+    localStorage.setItem('workspace', JSON.stringify(normalized))
+
+    if (normalized.mode === 'organization' && normalized.organization_id) {
+      setWorkspaceMode('organization')
+      setActiveOrgId(normalized.organization_id)
+      const match = organizations.find(
+        (o) => String(o.id) === String(normalized.organization_id)
+      )
+      setActiveOrgName(match?.name || normalized.name || '')
+      setActiveOrgRole(match?.role || normalized.role || null)
+    } else {
+      setWorkspaceMode('personal')
+      setActiveOrgId(null)
+      setActiveOrgName('')
+      setActiveOrgRole(null)
+    }
   }
 
   const switchToPersonal = () => {
-    setWorkspaceMode('personal')
-    setActiveOrgId(null)
-    setActiveOrgName('')
-    setActiveOrgRole(null)
+    switchWorkspace({ mode: 'personal', organization_id: null })
   }
 
   const switchToOrganization = (org) => {
-    setWorkspaceMode('organization')
-    setActiveOrgId(org.id)
-    setActiveOrgName(org.name)
-    setActiveOrgRole(org.role || null)
+    if (!org?.id) return
+    switchWorkspace({
+      mode: 'organization',
+      organization_id: org.id,
+      name: org.name,
+      role: org.role || null,
+    })
   }
 
   const handleCreateOrganization = async () => {
@@ -1917,12 +1963,71 @@ function App() {
     })
   }, [formData.name, formData.hazard_symbols, showForm])
 
+  /**
+   * PubChem auto-enrichment (debounced).
+   * When the form is open and the user types a name or CAS number,
+   * automatically fill molecular formula (and name if still empty)
+   * after a short pause. Never overwrites fields the user already filled.
+   */
+  useEffect(() => {
+    if (!showForm) return
+
+    const name = (formData.name || '').trim()
+    const cas = (formData.cas_number || '').trim()
+    const query = cas || name
+
+    // Skip if nothing useful to look up, or formula already present
+    if (!query || query.length < 3) return
+    if ((formData.molecular_formula || '').trim()) return
+
+    const requestId = ++pubChemAbortRef.current
+    const timer = setTimeout(async () => {
+      // Another keystroke may have cancelled this request
+      if (requestId !== pubChemAbortRef.current) return
+
+      setLookingUp(true)
+      try {
+        const result = await lookupPubChem(query)
+        // Stale response — user kept typing
+        if (requestId !== pubChemAbortRef.current) return
+        if (!result) return
+
+        setFormData((prev) => {
+          // Only fill empty fields — never clobber user input
+          const next = { ...prev }
+          if (!(prev.molecular_formula || '').trim() && result.molecular_formula) {
+            next.molecular_formula = result.molecular_formula
+          }
+          if (!(prev.name || '').trim() && result.iupac_name) {
+            next.name = result.iupac_name
+          }
+          return next
+        })
+      } catch (err) {
+        console.warn('PubChem auto-enrich failed:', err)
+      } finally {
+        if (requestId === pubChemAbortRef.current) {
+          setLookingUp(false)
+        }
+      }
+    }, 700) // debounce 700 ms after last keystroke
+
+    return () => {
+      clearTimeout(timer)
+      // Invalidate in-flight request when deps change
+      pubChemAbortRef.current += 1
+    }
+  }, [formData.name, formData.cas_number, formData.molecular_formula, showForm])
+
+  /** Manual PubChem lookup (button). Overwrites formula; fills name only if empty. */
   const handlePubChemLookup = async () => {
     const query = formData.cas_number.trim() || formData.name.trim()
     if (!query) {
       showMessage('error', 'Enter a chemical name or CAS number first')
       return
     }
+    // Cancel any pending auto-lookup
+    pubChemAbortRef.current += 1
     setLookingUp(true)
     try {
       const result = await lookupPubChem(query)
@@ -1933,7 +2038,7 @@ function App() {
       setFormData((prev) => ({
         ...prev,
         molecular_formula: result.molecular_formula || prev.molecular_formula,
-        name: prev.name || result.iupac_name || prev.name,
+        name: prev.name.trim() ? prev.name : result.iupac_name || prev.name,
       }))
       showMessage('success', 'Data loaded from PubChem')
     } catch (error) {
@@ -2104,6 +2209,18 @@ function App() {
   )
 
 
+  /* Close header ⋯ menu when clicking outside */
+  useEffect(() => {
+    if (!headerMenuOpen) return undefined
+    const onPointerDown = (e) => {
+      if (headerMenuRef.current && !headerMenuRef.current.contains(e.target)) {
+        setHeaderMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    return () => document.removeEventListener('mousedown', onPointerDown)
+  }, [headerMenuOpen])
+
   /* ======================================================================== */
   /* KEYBOARD SHORTCUTS                                                       */
   /* ======================================================================== */
@@ -2129,6 +2246,9 @@ function App() {
         setCompatOpen(false)
         setShowScanner(false)
         setShowQrModal(null)
+        setHeaderMenuOpen(false)
+        setShowInviteModal(false)
+        setShowCreateOrg(false)
         if (showForm) resetForm()
       }
       if (
@@ -2191,6 +2311,7 @@ function App() {
           </div>
         </div>
 
+        {/* Primary tools — keep critical actions visible */}
         <div className="header-tools">
           <div className="tool-group">
             <div className="notif-wrapper" ref={notifRef}>
@@ -2204,128 +2325,182 @@ function App() {
               </button>
             </div>
 
-            <button className="tool-btn" onClick={() => setShowHistory(true)} title="Usage History">
-              📋
-            </button>
-
-            <button className="tool-btn" onClick={() => setCompatOpen(true)} title="Compatibility Checker">
+            <button
+              className="tool-btn"
+              onClick={() => setCompatOpen(true)}
+              title="Compatibility Checker"
+            >
               ⚠️
               {compatibilityIssues.length > 0 && (
                 <span className="badge">{compatibilityIssues.length}</span>
               )}
             </button>
 
-            <button className="tool-btn" onClick={startScanner} title="Scan Barcode / QR">
-              📷
-            </button>
-
-            <button className="tool-btn" onClick={() => setCommandOpen(true)} title="Command palette">
-              ⌘K
-            </button>
+            {/* Overflow menu (⋯) for secondary actions */}
+            <div className="header-menu-wrapper" ref={headerMenuRef} style={{ position: 'relative' }}>
+              <button
+                className={`tool-btn ${headerMenuOpen ? 'active' : ''}`}
+                onClick={() => setHeaderMenuOpen((v) => !v)}
+                title="More actions"
+                aria-haspopup="menu"
+                aria-expanded={headerMenuOpen}
+              >
+                ⋯
+              </button>
+              {headerMenuOpen && (
+                <div
+                  className="header-menu-dropdown"
+                  role="menu"
+                  style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 6px)',
+                    right: 0,
+                    minWidth: 220,
+                    background: 'var(--panel, var(--bg-elevated, #fff))',
+                    border: '1px solid var(--border)',
+                    borderRadius: 12,
+                    boxShadow: '0 10px 30px rgba(0,0,0,0.18)',
+                    padding: 6,
+                    zIndex: 1000,
+                  }}
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    onClick={() => {
+                      setShowHistory(true)
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>📋</span> Usage History
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    onClick={() => {
+                      startScanner()
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>📷</span> Scan Barcode / QR
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    onClick={() => {
+                      setCommandOpen(true)
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>⌘K</span> Command palette
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    onClick={() => {
+                      setHazardLegendOpen(true)
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>ℹ️</span> Hazard legend
+                  </button>
+                  <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    onClick={() => {
+                      setShowCreateOrg(true)
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>🏢</span> Create organization
+                  </button>
+                  {activeOrgId && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="header-menu-item"
+                      style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                      onClick={() => {
+                        setShowInviteModal(true)
+                        setHeaderMenuOpen(false)
+                      }}
+                    >
+                      <span>✉️</span> Invite members
+                    </button>
+                  )}
+                  <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    onClick={() => {
+                      setShowLanding(true)
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>ℹ️</span> About
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
         <div className="header-end">
-
+          {/* Personal / Organization workspace switch — keeps individual accounts working */}
           <div className="workspace-switcher">
             <select
               value={
-                workspace.mode === 'personal'
-                  ? 'personal'
-                  : `org-${workspace.organization_id}`
+                workspace?.mode === 'organization' && workspace?.organization_id
+                  ? `org-${workspace.organization_id}`
+                  : 'personal'
               }
               onChange={(e) => {
                 const v = e.target.value
                 if (v === 'personal') {
                   switchWorkspace({ mode: 'personal', organization_id: null })
                 } else {
-                  const id = Number(v.replace('org-', ''))
+                  const id = v.replace('org-', '')
+                  const org = organizations.find((o) => String(o.id) === String(id))
                   switchWorkspace({
                     mode: 'organization',
-                    organization_id: id,
+                    organization_id: org?.id ?? id,
+                    name: org?.name,
+                    role: org?.role,
                   })
                 }
               }}
-              title="Workspace"
+              title="Workspace: Personal inventory or Organization shared inventory"
             >
-              <option value="personal">Personal</option>
+              <option value="personal">👤 Personal</option>
               {organizations.map((org) => (
                 <option key={org.id} value={`org-${org.id}`}>
-                  {org.name}
+                  🏢 {org.name}
                   {org.role ? ` (${org.role})` : ''}
                 </option>
               ))}
             </select>
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              onClick={async () => {
-                const name = window.prompt('Organization name')
-                if (!name || !name.trim()) return
-                try {
-                  const token = await getAccessToken()
-                  const res = await fetch(`${API_URL}/organizations`, {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      Authorization: `Bearer ${token}`,
-                    },
-                    body: JSON.stringify({ name: name.trim() }),
-                  })
-                  if (!res.ok) {
-                    showMessage('error', 'Could not create organization')
-                    return
-                  }
-                  const org = await res.json()
-                  await fetchOrganizations()
-                  switchWorkspace({
-                    mode: 'organization',
-                    organization_id: org.id,
-                  })
-                  showMessage('success', `Created ${org.name}`)
-                } catch (err) {
-                  showMessage('error', 'Could not create organization')
-                }
-              }}
-            >
-              + Org
-            </button>
-
-            {activeOrgId && (
-            <button
-                className="btn btn-ghost"
-                onClick={() => setShowInviteModal(true)}
-                title="Invite members"
-              >
-                Invite
-              </button>
-            )}
-
-            {activeOrgId && (
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              onClick={() => {
-                const email = window.prompt('Invite email')
-                if (email) inviteToOrg(email, 'member')
-              }}
-            >
-              Invite
-            </button>
-          )}
           </div>
 
           <button className="tool-btn theme-btn" onClick={toggleTheme} title="Toggle theme">
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>
 
-          <div className="user-pill">
+          <div className="user-pill" title={session.user?.email}>
             {session.user?.email}
           </div>
-
-          <button className="ghost-btn" onClick={() => setShowLanding(true)}>
-            About
-          </button>
 
           <button className="ghost-btn" onClick={handleLogout}>
             Logout
@@ -2646,9 +2821,13 @@ function App() {
                           type="button"
                           className="btn btn-sm btn-primary lookup-btn"
                           onClick={handlePubChemLookup}
-                          disabled={lookingUp || !formData.name.trim()}
+                          disabled={
+                            lookingUp ||
+                            (!formData.name.trim() && !formData.cas_number.trim())
+                          }
+                          title="Look up molecular formula on PubChem"
                         >
-                          {lookingUp ? '…' : 'Lookup'}
+                          {lookingUp ? 'Looking up…' : 'Lookup'}
                         </button>
                       </div>
                       {formErrors.name && <span className="error-text">{formErrors.name}</span>}
