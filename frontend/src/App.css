@@ -1562,6 +1562,7 @@ a {
   }
 }
 
+
 /* ==================== NOTIFICATIONS (modal style) ==================== */
 
 .notif-btn {
@@ -1593,7 +1594,6 @@ a {
   inset: 0;
   background: rgba(15, 23, 42, 0.55);
   backdrop-filter: blur(6px);
-  z-index: 800;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1759,6 +1759,63 @@ a {
   width: 16px;
   height: 16px;
   accent-color: var(--primary);
+}
+
+/* ==================== HEADER LAYER ==================== */
+.app-header,
+.header {
+  position: relative;
+  z-index: 30;
+}
+
+/* Overflow menu above header content */
+.header-menu,
+.dropdown-menu,
+.menu-dropdown {
+  z-index: 60;
+}
+
+/* ==================== TOAST / ALERT ABOVE HEADER ==================== */
+.toast,
+.message,
+.message-toast,
+.app-toast,
+.alert-toast,
+.notification-toast {
+  position: fixed !important;
+  top: 18px !important;
+  right: 18px !important;
+  left: auto !important;
+  z-index: 100000 !important;
+  max-width: min(420px, calc(100vw - 24px));
+  pointer-events: auto;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+}
+
+/* ==================== MODALS / FORM OVERLAY ABOVE HEADER ==================== */
+.modal-overlay,
+.form-overlay,
+.notif-modal-overlay,
+.command-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 90000 !important;
+}
+
+.modal,
+.form-panel,
+.history-panel,
+.notif-modal,
+.command-palette {
+  position: relative;
+  z-index: 90001;
+}
+
+/* Extra safety if your add-chemical uses a specific wrapper */
+.form-overlay .modal,
+.form-overlay .form-panel,
+.modal-overlay .modal {
+  z-index: 90002;
 }
 
 /* ==================== HISTORY PANEL ==================== */
@@ -1962,7 +2019,6 @@ a {
   inset: 0;
   background: rgba(15, 23, 42, 0.6);
   backdrop-filter: blur(8px);
-  z-index: 300;
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -2043,7 +2099,6 @@ kbd {
   inset: 0;
   background: rgba(15, 23, 42, 0.55);
   backdrop-filter: blur(6px);
-  z-index: 250;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2550,6 +2605,53 @@ select:focus-visible {
   .form-group-barcode {
     grid-column: 1;
   }
+}
+
+/* ========== FINAL LAYER ORDER (keep at end of file) ========== */
+.app-header,
+.header {
+  position: relative;
+  z-index: 20 !important;
+}
+
+.header-menu,
+.dropdown-menu,
+.menu-dropdown {
+  z-index: 40 !important;
+}
+
+.toast,
+.message,
+.message-toast,
+.app-toast,
+.alert-toast,
+.notification-toast {
+  position: fixed !important;
+  top: 18px !important;
+  right: 18px !important;
+  left: auto !important;
+  z-index: 100000 !important;
+  max-width: min(420px, calc(100vw - 24px));
+  pointer-events: auto;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+}
+
+.modal-overlay,
+.form-overlay,
+.notif-modal-overlay,
+.command-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 90000 !important;
+}
+
+.modal,
+.form-panel,
+.history-panel,
+.notif-modal,
+.command-palette {
+  position: relative;
+  z-index: 90001 !important;
 }
 
 
