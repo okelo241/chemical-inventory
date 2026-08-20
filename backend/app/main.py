@@ -25,16 +25,15 @@ app = FastAPI(title="Chemical Inventory API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://chemical-inventory-zihn.vercel.app",
+        "https://chemicalinventory-three.vercel.app",
+        "https://chemicalinventory-git-main-chemical-inventory.vercel.app",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-        "*",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 # ========== Supabase ==========
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://qgdtkwhgszvcywsnuyff.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_KEY")
