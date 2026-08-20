@@ -996,17 +996,9 @@ function App() {
     })()
   }, [session])
 
-  useEffect(() => {
-    if (session) {
-      fetchOrganizations()
-    }
-  }, [session, fetchOrganizations])
-
-  useEffect(() => {
-    if (session) {
-      fetchChemicals()
-    }
-  }, [session, workspace.mode, workspace.organization_id, activeOrgId, fetchChemicals])
+  // NOTE: Do NOT call fetchChemicals / fetchOrganizations here in dependency
+  // arrays before those functions are declared (TDZ → "Cannot access before
+  // initialization" in production). Data loading runs in the API-layer effects below.
 
   /* ======================================================================== */
   /* BARCODE / QR HANDLERS (MUST stay inside App)                             */
