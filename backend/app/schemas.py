@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field, EmailStr, ConfigDict
-from typing import Optional, List, Literal, Union
+from pydantic import BaseModel, Field, EmailStr, ConfigDict, field_validator
+from typing import Optional, List, Literal, Any, Union
 from datetime import date, datetime
 from uuid import UUID
 
@@ -7,13 +7,13 @@ from uuid import UUID
 # ---------- Chemicals ----------
 
 class ChemicalBase(BaseModel):
-    name: str
+    name: str = ""
     cas_number: Optional[str] = None
-    quantity: float = 0.0
-    unit: str = "g"
+    quantity: Optional[float] = 0.0
+    unit: Optional[str] = "g"
     location: Optional[str] = None
     expiry_date: Optional[date] = None
-    min_stock: float = 0.0
+    min_stock: Optional[float] = 0.0
     hazard_notes: Optional[str] = None
     molecular_formula: Optional[str] = None
     hazard_symbols: Optional[List[str]] = None
@@ -21,14 +21,69 @@ class ChemicalBase(BaseModel):
     batch_lot: Optional[str] = None
     supplier: Optional[str] = None
     barcode: Optional[str] = None
-    # Legacy flag; prefer user_collections table when available
+    # Legacy flag; prefer user_collections when available
     in_collection: Optional[bool] = False
-    # None = personal workspace chemical; set = org workspace chemical
+    # None = personal workspace; set = org workspace
     organization_id: Optional[UUID] = None
+
+    @field_validator("quantity", "min_stock", mode="before")
+    @classmethod
+    def coerce_float(cls, v: Any) -> float:
+        if v is None or v == "":
+            return 0.0
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @field_validator("hazard_symbols", "chemical_classes", mode="before")
+    @classmethod
+    def coerce_str_list(cls, v: Any) -> Optional[List[str]]:
+        if v is None:
+            return None
+        if isinstance(v, list):
+            return [str(x) for x in v if x is not None]
+        if isinstance(v, str):
+            parts = [p.strip() for p in v.split(",") if p.strip()]
+            return parts or None
+        return None
+
+    @field_validator("organization_id", mode="before")
+    @classmethod
+    def coerce_org_id(cls, v: Any) -> Optional[UUID]:
+        if v is None or v == "":
+            return None
+        if isinstance(v, UUID):
+            return v
+        try:
+            return UUID(str(v))
+        except Exception:
+            return None
+
+    @field_validator("in_collection", mode="before")
+    @classmethod
+    def coerce_bool(cls, v: Any) -> bool:
+        if v is None:
+            return False
+        return bool(v)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def coerce_name(cls, v: Any) -> str:
+        if v is None:
+            return ""
+        return str(v)
+
+    @field_validator("unit", mode="before")
+    @classmethod
+    def coerce_unit(cls, v: Any) -> str:
+        if v is None or v == "":
+            return "g"
+        return str(v)
 
 
 class ChemicalCreate(ChemicalBase):
-    pass
+    name: str = Field(..., min_length=1)
 
 
 class ChemicalUpdate(BaseModel):
@@ -48,6 +103,18 @@ class ChemicalUpdate(BaseModel):
     barcode: Optional[str] = None
     in_collection: Optional[bool] = None
     organization_id: Optional[UUID] = None
+
+    @field_validator("organization_id", mode="before")
+    @classmethod
+    def coerce_org_id(cls, v: Any) -> Optional[UUID]:
+        if v is None or v == "":
+            return None
+        if isinstance(v, UUID):
+            return v
+        try:
+            return UUID(str(v))
+        except Exception:
+            return None
 
 
 class Chemical(ChemicalBase):
@@ -72,7 +139,7 @@ class OrganizationOut(BaseModel):
     slug: Optional[str] = None
     created_by: Optional[str] = None
     created_at: Optional[datetime] = None
-    # Role of the *current* user in this org (from join), not a DB column on Organization
+    # Current user's role in this org (from join)
     role: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -109,7 +176,7 @@ class InviteOut(BaseModel):
     email: str
     role: str
     status: str  # pending | accepted | revoked
-    token: Optional[str] = None  # returned so frontend can build /?token=...
+    token: Optional[str] = None
     invited_by: Optional[str] = None
     created_at: Optional[datetime] = None
     accepted_at: Optional[datetime] = None

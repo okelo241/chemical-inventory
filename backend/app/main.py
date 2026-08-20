@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Optional, Set, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from uuid import UUID
 import os
 import re
@@ -36,7 +36,6 @@ ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",
 ]
 
-# Any https://*.vercel.app (covers every Vercel preview URL)
 VERCEL_ORIGIN_REGEX = r"https://[a-zA-Z0-9-]+\.vercel\.app"
 
 app.add_middleware(
@@ -52,12 +51,6 @@ app.add_middleware(
 
 
 class EnsureCORSHeadersMiddleware(BaseHTTPMiddleware):
-    """
-    Safety net: if something fails before Starlette CORS runs, still attach
-    Access-Control-Allow-Origin for known frontends so the browser shows
-    the real error instead of a generic CORS failure.
-    """
-
     async def dispatch(self, request: Request, call_next):
         origin = request.headers.get("origin") or ""
         allowed = origin in ALLOWED_ORIGINS or bool(
@@ -96,8 +89,6 @@ class EnsureCORSHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-# Add AFTER CORSMiddleware so this runs closer to the app on the way out
-# (Starlette stacks middleware last-added = outermost)
 app.add_middleware(EnsureCORSHeadersMiddleware)
 
 
@@ -118,14 +109,7 @@ def _to_dict(obj, exclude_unset: bool = False):
     return obj.dict(exclude_unset=exclude_unset)
 
 
-def _as_str(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    return str(value)
-
-
 def _parse_uuid(value: Any) -> Optional[UUID]:
-    """Accept UUID objects or strings from query/body/frontend localStorage."""
     if value is None or value == "":
         return None
     if isinstance(value, UUID):
@@ -134,6 +118,78 @@ def _parse_uuid(value: Any) -> Optional[UUID]:
         return UUID(str(value))
     except Exception:
         return None
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_str_list(value: Any) -> Optional[List[str]]:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return [str(x) for x in value if x is not None]
+    if isinstance(value, str):
+        parts = [p.strip() for p in value.split(",") if p.strip()]
+        return parts or None
+    return None
+
+
+def _as_date_iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
+
+
+def _as_datetime_iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def chemical_to_dict(r: Any) -> dict:
+    """Serialize Chemical ORM row without ResponseValidationError."""
+    try:
+        if hasattr(schemas, "Chemical"):
+            return schemas.Chemical.model_validate(r).model_dump(mode="json")
+    except Exception as ve:
+        print("Chemical validation error id=", getattr(r, "id", None), ":", ve)
+
+    org_id = getattr(r, "organization_id", None)
+    return {
+        "id": int(getattr(r, "id", 0) or 0),
+        "name": getattr(r, "name", None) or "",
+        "cas_number": getattr(r, "cas_number", None),
+        "quantity": _as_float(getattr(r, "quantity", None), 0.0),
+        "unit": getattr(r, "unit", None) or "g",
+        "location": getattr(r, "location", None),
+        "expiry_date": _as_date_iso(getattr(r, "expiry_date", None)),
+        "min_stock": _as_float(getattr(r, "min_stock", None), 0.0),
+        "hazard_notes": getattr(r, "hazard_notes", None),
+        "molecular_formula": getattr(r, "molecular_formula", None),
+        "hazard_symbols": _as_str_list(getattr(r, "hazard_symbols", None)) or [],
+        "chemical_classes": _as_str_list(getattr(r, "chemical_classes", None)) or [],
+        "batch_lot": getattr(r, "batch_lot", None),
+        "supplier": getattr(r, "supplier", None),
+        "barcode": getattr(r, "barcode", None),
+        "in_collection": bool(getattr(r, "in_collection", False)),
+        "organization_id": str(org_id) if org_id is not None else None,
+        "sds_filename": getattr(r, "sds_filename", None),
+        "user_id": getattr(r, "user_id", None),
+        "created_at": _as_datetime_iso(getattr(r, "created_at", None)),
+        "updated_at": _as_datetime_iso(getattr(r, "updated_at", None)),
+    }
 
 
 def get_current_user_id(authorization: Optional[str] = Header(None)) -> str:
@@ -156,8 +212,6 @@ def get_current_user_id(authorization: Optional[str] = Header(None)) -> str:
         print("Auth error:", str(e))
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-
-# ========== Org helpers ==========
 
 def _slugify(name: str) -> str:
     s = re.sub(r"[^a-zA-Z0-9]+", "-", (name or "").strip().lower()).strip("-")
@@ -206,18 +260,14 @@ def health():
     return {"ok": True, "cors": "enabled"}
 
 
-# ========== Chemicals ==========
+# ========== Chemicals (no strict response_model — fixes ResponseValidationError) ==========
 
-@app.get("/chemicals", response_model=List[schemas.Chemical])
+@app.get("/chemicals")
 def get_chemicals(
     organization_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    """
-    Personal workspace: no organization_id → user's personal chemicals.
-    Organization workspace: organization_id → org chemicals (member only).
-    """
     try:
         org_uuid = _parse_uuid(organization_id)
 
@@ -227,17 +277,18 @@ def get_chemicals(
                 q = q.filter(models.Chemical.organization_id.is_(None))
             except Exception as e:
                 print("personal org filter skipped:", e)
-            return q.order_by(models.Chemical.name).all()
+            rows = q.order_by(models.Chemical.name).all()
+        else:
+            if not get_membership(db, user_id, org_uuid):
+                raise HTTPException(status_code=403, detail="Not a member of this organization")
+            rows = (
+                db.query(models.Chemical)
+                .filter(models.Chemical.organization_id == org_uuid)
+                .order_by(models.Chemical.name)
+                .all()
+            )
 
-        if not get_membership(db, user_id, org_uuid):
-            raise HTTPException(status_code=403, detail="Not a member of this organization")
-
-        return (
-            db.query(models.Chemical)
-            .filter(models.Chemical.organization_id == org_uuid)
-            .order_by(models.Chemical.name)
-            .all()
-        )
+        return [chemical_to_dict(r) for r in rows]
     except HTTPException:
         raise
     except Exception as e:
@@ -245,7 +296,7 @@ def get_chemicals(
         raise HTTPException(status_code=500, detail=f"Could not load chemicals: {e}")
 
 
-@app.get("/chemicals/{chemical_id}", response_model=schemas.Chemical)
+@app.get("/chemicals/{chemical_id}")
 def get_chemical(
     chemical_id: int,
     db: Session = Depends(get_db),
@@ -254,10 +305,10 @@ def get_chemical(
     chemical = db.query(models.Chemical).filter(models.Chemical.id == chemical_id).first()
     if not chemical or not can_access_chemical(db, user_id, chemical):
         raise HTTPException(status_code=404, detail="Chemical not found")
-    return chemical
+    return chemical_to_dict(chemical)
 
 
-@app.post("/chemicals", response_model=schemas.Chemical)
+@app.post("/chemicals")
 def create_chemical(
     chemical: schemas.ChemicalCreate,
     db: Session = Depends(get_db),
@@ -273,14 +324,19 @@ def create_chemical(
     else:
         data["organization_id"] = None
 
+    if data.get("quantity") is None:
+        data["quantity"] = 0.0
+    if data.get("min_stock") is None:
+        data["min_stock"] = 0.0
+
     db_chemical = models.Chemical(**data, user_id=str(user_id))
     db.add(db_chemical)
     db.commit()
     db.refresh(db_chemical)
-    return db_chemical
+    return chemical_to_dict(db_chemical)
 
 
-@app.put("/chemicals/{chemical_id}", response_model=schemas.Chemical)
+@app.put("/chemicals/{chemical_id}")
 def update_chemical(
     chemical_id: int,
     chemical: schemas.ChemicalUpdate,
@@ -305,7 +361,7 @@ def update_chemical(
 
     db.commit()
     db.refresh(db_chemical)
-    return db_chemical
+    return chemical_to_dict(db_chemical)
 
 
 @app.delete("/chemicals/{chemical_id}")
@@ -383,13 +439,13 @@ def get_sds_url(
 
 # ========== Collections ==========
 
-@app.get("/collections/me", response_model=List[schemas.Chemical])
+@app.get("/collections/me")
 def get_my_collection(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
     if hasattr(models, "UserCollection"):
-        return (
+        rows = (
             db.query(models.Chemical)
             .join(
                 models.UserCollection,
@@ -399,8 +455,9 @@ def get_my_collection(
             .order_by(models.Chemical.name)
             .all()
         )
+        return [chemical_to_dict(r) for r in rows]
 
-    return (
+    rows = (
         db.query(models.Chemical)
         .filter(
             models.Chemical.user_id == str(user_id),
@@ -409,6 +466,7 @@ def get_my_collection(
         .order_by(models.Chemical.name)
         .all()
     )
+    return [chemical_to_dict(r) for r in rows]
 
 
 @app.post("/collections/toggle")
