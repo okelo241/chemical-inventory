@@ -1,5 +1,7 @@
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Header, Query
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Optional, Set, Any
 from datetime import datetime, timezone
@@ -21,20 +23,84 @@ except Exception as e:
 
 app = FastAPI(title="Chemical Inventory API")
 
-# ---- CORS (Vercel frontend + local Vite) ----
+# ---------------------------------------------------------------------------
+# CORS — must run early. Allow all Vercel preview/production hosts + local.
+# ---------------------------------------------------------------------------
+ALLOWED_ORIGINS = [
+    "https://chemical-inventory-zihn.vercel.app",
+    "https://chemicalinventory-three.vercel.app",
+    "https://chemicalinventory-git-main-chemical-inventory.vercel.app",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+# Any https://*.vercel.app (covers every Vercel preview URL)
+VERCEL_ORIGIN_REGEX = r"https://[a-zA-Z0-9-]+\.vercel\.app"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://chemical-inventory-zihn.vercel.app",
-        "https://chemicalinventory-three.vercel.app",
-        "https://chemicalinventory-git-main-chemical-inventory.vercel.app",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=VERCEL_ORIGIN_REGEX,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=86400,
 )
+
+
+class EnsureCORSHeadersMiddleware(BaseHTTPMiddleware):
+    """
+    Safety net: if something fails before Starlette CORS runs, still attach
+    Access-Control-Allow-Origin for known frontends so the browser shows
+    the real error instead of a generic CORS failure.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        origin = request.headers.get("origin") or ""
+        allowed = origin in ALLOWED_ORIGINS or bool(
+            re.match(VERCEL_ORIGIN_REGEX, origin)
+        )
+
+        if request.method == "OPTIONS" and allowed:
+            return JSONResponse(
+                content={"ok": True},
+                status_code=200,
+                headers={
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD",
+                    "Access-Control-Allow-Headers": request.headers.get(
+                        "access-control-request-headers", "*"
+                    ),
+                    "Access-Control-Max-Age": "86400",
+                },
+            )
+
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            print("Unhandled error:", repr(exc))
+            response = JSONResponse(
+                status_code=500,
+                content={"detail": "Internal server error"},
+            )
+
+        if allowed and origin:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Vary"] = "Origin"
+
+        return response
+
+
+# Add AFTER CORSMiddleware so this runs closer to the app on the way out
+# (Starlette stacks middleware last-added = outermost)
+app.add_middleware(EnsureCORSHeadersMiddleware)
+
+
 # ========== Supabase ==========
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://qgdtkwhgszvcywsnuyff.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_KEY")
@@ -137,7 +203,7 @@ def read_root():
 
 @app.get("/health")
 def health():
-    return {"ok": True}
+    return {"ok": True, "cors": "enabled"}
 
 
 # ========== Chemicals ==========
@@ -149,14 +215,12 @@ def get_chemicals(
     user_id: str = Depends(get_current_user_id),
 ):
     """
-    Personal workspace: no organization_id (or empty) → user's personal chemicals.
+    Personal workspace: no organization_id → user's personal chemicals.
     Organization workspace: organization_id → org chemicals (member only).
-    Matches JSX: fetch(`${API_URL}/chemicals?organization_id=${activeOrgId}`)
     """
     try:
         org_uuid = _parse_uuid(organization_id)
 
-        # Personal workspace
         if org_uuid is None:
             q = db.query(models.Chemical).filter(models.Chemical.user_id == str(user_id))
             try:
@@ -165,7 +229,6 @@ def get_chemicals(
                 print("personal org filter skipped:", e)
             return q.order_by(models.Chemical.name).all()
 
-        # Organization workspace
         if not get_membership(db, user_id, org_uuid):
             raise HTTPException(status_code=403, detail="Not a member of this organization")
 
@@ -319,8 +382,6 @@ def get_sds_url(
 
 
 # ========== Collections ==========
-# JSX currently toggles via PUT /chemicals/{id} { in_collection }.
-# These routes remain for a cleaner dedicated API.
 
 @app.get("/collections/me", response_model=List[schemas.Chemical])
 def get_my_collection(
@@ -397,7 +458,6 @@ def create_organization(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    """Matches JSX: POST /organizations { name } then switchWorkspace to new org."""
     try:
         base_slug = _slugify(payload.name)
         slug = base_slug
@@ -452,7 +512,6 @@ def list_my_organizations(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    """Matches JSX workspace dropdown: GET /organizations."""
     try:
         rows = (
             db.query(models.Organization, models.OrganizationMember.role)
@@ -526,7 +585,7 @@ def get_workspace_hint(
     )
 
 
-# ========== Invites (matches JSX invite modal + ?token= accept) ==========
+# ========== Invites ==========
 
 @app.post(
     "/organizations/{organization_id}/invites",
@@ -552,7 +611,6 @@ def invite_member(
     if not email or "@" not in email:
         raise HTTPException(status_code=400, detail="Invalid email")
 
-    # Reuse existing pending invite for same email
     existing_invite = (
         db.query(models.OrganizationInvite)
         .filter(
@@ -607,11 +665,6 @@ def accept_invite(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    """
-    Matches JSX:
-    - Auto-accept on load when URL has ?token=...
-    - Manual accept from invite modal
-    """
     token = (payload.token or "").strip()
     if not token:
         raise HTTPException(status_code=400, detail="token is required")
@@ -714,7 +767,7 @@ def update_member_role(
     return {"message": "Role updated", "user_id": member_user_id, "role": role}
 
 
-# ========== Transactions (in-memory fallback — matches JSX usage log) ==========
+# ========== Transactions (in-memory fallback) ==========
 _TRANSACTIONS: list = []
 
 
