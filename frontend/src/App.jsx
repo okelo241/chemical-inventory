@@ -1312,7 +1312,10 @@ function App() {
       setChemicals(Array.isArray(data) ? data : [])
     } catch (error) {
       console.error('Failed to fetch chemicals:', error)
-      showMessage('error', 'Could not load chemicals. Please check your connection.')
+      // only show toast for real user-visible failures
+      if (!silent) {
+        showMessage('error', 'Could not load chemicals. Please check your connection.')
+      }
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -1521,7 +1524,7 @@ function App() {
     }
   }
 
-  const fetchOrganizations = async () => {
+  const fetchOrganizations = useCallback(async () => {
     try {
       const token = await getAccessToken()
       if (!token) return
@@ -1534,7 +1537,7 @@ function App() {
     } catch (err) {
       console.warn('Could not load organizations', err)
     }
-  }
+  }, [API_URL, getAccessToken])
 
   const fetchTransactions = useCallback(async () => {
     try {
@@ -1553,13 +1556,12 @@ function App() {
   }, [API_URL, getAccessToken])
 
   useEffect(() => {
-    if (session) {
-      fetchChemicals()
-      fetchTransactions()
-      fetchOrganizations()
-    }
-  }, [session, fetchChemicals, fetchTransactions, fetchOrganizations]) // eslint-disable-line react-hooks/exhaustive-deps
-
+    if (!session) return
+    fetchChemicals()
+    fetchTransactions()
+    fetchOrganizations()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, activeOrgId])
   /* Apply Login Personal / Organization intent once per session */
   useEffect(() => {
     if (!session) return
