@@ -2488,6 +2488,18 @@ function App() {
                   >
                     <span>ℹ️</span> Hazard legend
                   </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    onClick={() => {
+                      fetchChemicals()
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>🔄</span> Refresh data
+                  </button>
                   {accountMode === 'organization' && (
                     <>
                       <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
