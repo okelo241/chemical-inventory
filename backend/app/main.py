@@ -38,7 +38,8 @@ ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",
 ]
 
-VERCEL_ORIGIN_REGEX = r"https://[a-zA-Z0-9-]+\.vercel\.app"
+# Matches any Vercel preview/production *.vercel.app URL
+VERCEL_ORIGIN_REGEX = r"https://.*\.vercel\.app"
 
 app.add_middleware(
     CORSMiddleware,
