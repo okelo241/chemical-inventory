@@ -9,7 +9,7 @@ import './App.css'
    - Personal / Organization workspace intent selector
    - Full Name + Email + Password + Confirm Password
    - Organization name (org signup only)
-   - 6-digit Email Confirmation Code (OTP)
+   - 6-digit Email Confirmation Code (OTP) via Supabase Auth
    - Forgot Password / Reset Password flow
    - Advanced validation & accessibility
    - Glassmorphism + matching landing page aesthetic
@@ -91,13 +91,11 @@ function Login({ onLogin }) {
   }, [])
 
   useEffect(() => {
-    // Clear feedback messages when mode changes
     setError(null)
     setMessage(null)
     setFormTouched(false)
   }, [mode])
 
-  // Resend cooldown timer
   useEffect(() => {
     if (resendCooldown <= 0) return
     const interval = setInterval(() => {
@@ -137,6 +135,7 @@ function Login({ onLogin }) {
     }
     try {
       localStorage.setItem('workspaceIntent', JSON.stringify(intent))
+      localStorage.setItem('accountMode', type === 'organization' ? 'organization' : 'personal')
     } catch {
       // ignore storage errors
     }
@@ -205,12 +204,14 @@ function Login({ onLogin }) {
 
   // ============================================================
   // AUTH HANDLERS
+  // OTP emails are sent by Supabase Auth (not Render).
+  // Personal and Organization use the same signUp + verifyOtp path.
   // ============================================================
   const handleLogin = async () => {
     persistWorkspaceIntent(accountType)
 
     const { data, error: authError } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
+      email: email.trim().toLowerCase(),
       password,
     })
 
@@ -226,18 +227,25 @@ function Login({ onLogin }) {
   }
 
   const handleSignUp = async () => {
-    persistWorkspaceIntent(accountType, orgName.trim())
+    const cleanEmail = email.trim().toLowerCase()
+    const cleanOrg = orgName.trim()
 
-    const { error: authError } = await supabase.auth.signUp({
-      email: email.trim(),
+    persistWorkspaceIntent(accountType, cleanOrg)
+
+    // Same Supabase signup for personal and organization.
+    // Organization only adds user_metadata (does not change email OTP delivery).
+    const { data, error: authError } = await supabase.auth.signUp({
+      email: cleanEmail,
       password,
       options: {
         data: {
           full_name: fullName.trim(),
           account_type: accountType,
           pending_org_name:
-            accountType === 'organization' ? orgName.trim() : null,
+            accountType === 'organization' ? cleanOrg : null,
         },
+        // Ensure email redirect stays on this app if magic-link fallback is used
+        emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
       },
     })
 
@@ -245,21 +253,51 @@ function Login({ onLogin }) {
       throw authError
     }
 
-    // Move user to the confirmation code step
+    // Supabase returns user with empty identities when email is already registered
+    // (and often does NOT send a new confirmation email).
+    const identities = data?.user?.identities
+    if (data?.user && Array.isArray(identities) && identities.length === 0) {
+      throw new Error(
+        'This email is already registered. Please sign in instead, or use Forgot password.'
+      )
+    }
+
+    // If email confirmation is disabled in Supabase, session is returned immediately
+    if (data?.session) {
+      persistWorkspaceIntent(accountType, cleanOrg)
+      onLogin(data.session)
+      return
+    }
+
+    // Email confirmation required — move to OTP step
+    // Proactively request a confirmation email again (helps when first mail is delayed)
+    try {
+      await supabase.auth.resend({
+        type: 'signup',
+        email: cleanEmail,
+      })
+    } catch (resendErr) {
+      // Non-fatal: first signUp may already have queued the email
+      console.warn('Signup resend hint:', resendErr?.message || resendErr)
+    }
+
     setMode('confirm')
     setMessage(
       accountType === 'organization'
-        ? 'A 6-digit confirmation code has been sent to your email. After you verify, you can finish setting up your organization workspace.'
-        : 'A 6-digit confirmation code has been sent to your email. Please enter it below to activate your personal account.'
+        ? 'A 6-digit confirmation code has been sent to your email (from Supabase). After you verify, you can finish setting up your organization workspace. Check spam if you do not see it within a minute.'
+        : 'A 6-digit confirmation code has been sent to your email (from Supabase). Please enter it below to activate your personal account. Check spam if you do not see it within a minute.'
     )
     setPassword('')
     setConfirmPassword('')
+    setOtpCode('')
     setResendCooldown(60)
   }
 
   const handleVerifyOtp = async () => {
+    const cleanEmail = email.trim().toLowerCase()
+
     const { data, error: otpError } = await supabase.auth.verifyOtp({
-      email: email.trim(),
+      email: cleanEmail,
       token: otpCode.trim(),
       type: 'signup',
     })
@@ -269,7 +307,6 @@ function Login({ onLogin }) {
     }
 
     if (data?.session) {
-      // User is automatically signed in after successful verification
       persistWorkspaceIntent(accountType, orgName.trim())
       onLogin(data.session)
     } else {
@@ -280,10 +317,10 @@ function Login({ onLogin }) {
     }
   }
 
-  // ---------- FORGOT PASSWORD HANDLERS ----------
   const handleForgotPassword = async () => {
-    const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-      redirectTo: window.location.origin,
+    const cleanEmail = email.trim().toLowerCase()
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
+      redirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
     })
 
     if (resetError) {
@@ -298,9 +335,10 @@ function Login({ onLogin }) {
   }
 
   const handleResetPassword = async () => {
-    // Verify the recovery OTP first
+    const cleanEmail = email.trim().toLowerCase()
+
     const { error: otpError } = await supabase.auth.verifyOtp({
-      email: email.trim(),
+      email: cleanEmail,
       token: otpCode.trim(),
       type: 'recovery',
     })
@@ -309,7 +347,6 @@ function Login({ onLogin }) {
       throw otpError
     }
 
-    // Update the password
     const { error: updateError } = await supabase.auth.updateUser({
       password: newPassword,
     })
@@ -334,32 +371,34 @@ function Login({ onLogin }) {
     setError(null)
     setMessage(null)
 
+    const cleanEmail = email.trim().toLowerCase()
+
     try {
       if (mode === 'confirm') {
         const { error: resendError } = await supabase.auth.resend({
           type: 'signup',
-          email: email.trim(),
+          email: cleanEmail,
         })
 
         if (resendError) {
           throw resendError
         }
 
-        setMessage('A new confirmation code has been sent to your email.')
+        setMessage('A new confirmation code has been sent to your email. Check inbox and spam.')
       } else if (mode === 'reset' || mode === 'forgot') {
-        const { error: resendError } = await supabase.auth.resetPasswordForEmail(email.trim())
+        const { error: resendError } = await supabase.auth.resetPasswordForEmail(cleanEmail)
 
         if (resendError) {
           throw resendError
         }
 
-        setMessage('A new recovery code has been sent to your email.')
+        setMessage('A new recovery code has been sent to your email. Check inbox and spam.')
       }
 
       setResendCooldown(60)
       setOtpCode('')
     } catch (err) {
-      setError(err?.message || 'Failed to resend code. Please try again.')
+      setError(err?.message || 'Failed to resend code. Please try again in a minute.')
     } finally {
       setLoading(false)
     }
@@ -441,18 +480,25 @@ function Login({ onLogin }) {
         err?.error_description ||
         'Something went wrong. Please try again.'
 
-      // Friendlier messages
-      if (errorMessage.toLowerCase().includes('email not confirmed')) {
+      const lower = errorMessage.toLowerCase()
+      if (lower.includes('email not confirmed')) {
         errorMessage =
           'Please confirm your email with the code we sent you before signing in.'
+        setMode('confirm')
       } else if (
-        errorMessage.toLowerCase().includes('token') ||
-        errorMessage.toLowerCase().includes('otp') ||
-        errorMessage.toLowerCase().includes('invalid')
+        lower.includes('token') ||
+        lower.includes('otp') ||
+        (lower.includes('invalid') && (mode === 'confirm' || mode === 'reset'))
       ) {
         errorMessage = 'Invalid or expired code. Please try again or request a new one.'
-      } else if (errorMessage.toLowerCase().includes('already registered')) {
+      } else if (
+        lower.includes('already registered') ||
+        lower.includes('already been registered') ||
+        lower.includes('user already registered')
+      ) {
         errorMessage = 'This email is already registered. Please sign in instead.'
+      } else if (lower.includes('rate limit') || lower.includes('too many')) {
+        errorMessage = 'Too many attempts. Please wait a minute before requesting another code.'
       }
 
       setError(errorMessage)
@@ -501,9 +547,6 @@ function Login({ onLogin }) {
   // ============================================================
   return (
     <div className={`auth-root ${mounted ? 'auth-root--mounted' : ''}`}>
-      {/* ========================================================
-          BACKGROUND LAYERS
-          ======================================================== */}
       <div className="auth-bg" aria-hidden="true" />
       <div className="auth-bg-gradient" aria-hidden="true" />
       <div className="auth-bg-grid" aria-hidden="true" />
@@ -511,20 +554,15 @@ function Login({ onLogin }) {
       <div className="auth-glow auth-glow--2" aria-hidden="true" />
       <div className="auth-glow auth-glow--3" aria-hidden="true" />
 
-      {/* Decorative corners */}
       <div className="auth-corner auth-corner--tl" aria-hidden="true" />
       <div className="auth-corner auth-corner--tr" aria-hidden="true" />
       <div className="auth-corner auth-corner--bl" aria-hidden="true" />
       <div className="auth-corner auth-corner--br" aria-hidden="true" />
 
-      {/* ========================================================
-          MAIN CARD
-          ======================================================== */}
       <div
         className={`auth-card ${cardVisible ? 'auth-card--visible' : ''}`}
         role="main"
       >
-        {/* -------------------- Header -------------------- */}
         <header className="auth-header">
           <div className="auth-logo-wrap">
             <div className="auth-logo">
@@ -549,7 +587,6 @@ function Login({ onLogin }) {
           </p>
         </header>
 
-        {/* -------------------- Account type intent -------------------- */}
         {(mode === 'login' || mode === 'signup') && (
           <div
             className="auth-account-type"
@@ -615,7 +652,6 @@ function Login({ onLogin }) {
           </div>
         )}
 
-        {/* -------------------- Mode Tabs -------------------- */}
         {(mode === 'login' || mode === 'signup') && (
           <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
             <button
@@ -646,16 +682,12 @@ function Login({ onLogin }) {
           </div>
         )}
 
-        {/* -------------------- Form -------------------- */}
         <form
           ref={formRef}
           className="auth-form"
           onSubmit={handleSubmit}
           noValidate
         >
-          {/* ==================================================
-              CONFIRMATION / RECOVERY CODE STEP
-              ================================================== */}
           {(mode === 'confirm' || mode === 'reset') && (
             <>
               <div className="auth-confirm-info">
@@ -664,7 +696,7 @@ function Login({ onLogin }) {
                     ? 'We sent a 6-digit code to'
                     : 'We sent a recovery code to'}
                 </p>
-                <p className="auth-confirm-email">{email}</p>
+                <p className="auth-confirm-email">{email.trim().toLowerCase()}</p>
               </div>
 
               <div
@@ -706,7 +738,6 @@ function Login({ onLogin }) {
                 )}
               </div>
 
-              {/* New Password fields – only in reset mode */}
               {mode === 'reset' && (
                 <>
                   <div
@@ -719,16 +750,7 @@ function Login({ onLogin }) {
                     </label>
                     <div className="auth-input-wrap">
                       <span className="auth-input-icon" aria-hidden="true">
-                        <svg
-                          width="18"
-                          height="18"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                           <rect x="5" y="11" width="14" height="10" rx="2" />
                           <path d="M8 11V7a4 4 0 0 1 8 0v4" />
                         </svg>
@@ -785,16 +807,7 @@ function Login({ onLogin }) {
                     </label>
                     <div className="auth-input-wrap">
                       <span className="auth-input-icon" aria-hidden="true">
-                        <svg
-                          width="18"
-                          height="18"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                           <rect x="5" y="11" width="14" height="10" rx="2" />
                           <path d="M8 11V7a4 4 0 0 1 8 0v4" />
                         </svg>
@@ -841,9 +854,6 @@ function Login({ onLogin }) {
             </>
           )}
 
-          {/* ==================================================
-              FORGOT PASSWORD (email only)
-              ================================================== */}
           {mode === 'forgot' && (
             <div
               className={`auth-field ${
@@ -855,16 +865,7 @@ function Login({ onLogin }) {
               </label>
               <div className="auth-input-wrap">
                 <span className="auth-input-icon" aria-hidden="true">
-                  <svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="3" y="5" width="18" height="14" rx="2" />
                     <path d="M3 7l9 6 9-6" />
                   </svg>
@@ -893,12 +894,8 @@ function Login({ onLogin }) {
             </div>
           )}
 
-          {/* ==================================================
-              LOGIN / SIGNUP FIELDS
-              ================================================== */}
           {(mode === 'login' || mode === 'signup') && (
             <>
-              {/* Full Name - Sign up only */}
               {mode === 'signup' && (
                 <div
                   className={`auth-field ${
@@ -910,16 +907,7 @@ function Login({ onLogin }) {
                   </label>
                   <div className="auth-input-wrap">
                     <span className="auth-input-icon" aria-hidden="true">
-                      <svg
-                        width="18"
-                        height="18"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.8"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
                         <circle cx="12" cy="7" r="4" />
                       </svg>
@@ -949,7 +937,6 @@ function Login({ onLogin }) {
                 </div>
               )}
 
-              {/* Organization name - org signup only */}
               {mode === 'signup' && accountType === 'organization' && (
                 <div
                   className={`auth-field ${
@@ -961,16 +948,7 @@ function Login({ onLogin }) {
                   </label>
                   <div className="auth-input-wrap">
                     <span className="auth-input-icon" aria-hidden="true">
-                      <svg
-                        width="18"
-                        height="18"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.8"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M3 21h18" />
                         <path d="M5 21V7l7-4 7 4v14" />
                         <path d="M9 21v-6h6v6" />
@@ -1005,7 +983,6 @@ function Login({ onLogin }) {
                 </div>
               )}
 
-              {/* Email */}
               <div
                 className={`auth-field ${
                   emailFocused || email ? 'auth-field--active' : ''
@@ -1016,16 +993,7 @@ function Login({ onLogin }) {
                 </label>
                 <div className="auth-input-wrap">
                   <span className="auth-input-icon" aria-hidden="true">
-                    <svg
-                      width="18"
-                      height="18"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="3" y="5" width="18" height="14" rx="2" />
                       <path d="M3 7l9 6 9-6" />
                     </svg>
@@ -1053,7 +1021,6 @@ function Login({ onLogin }) {
                 )}
               </div>
 
-              {/* Password */}
               <div
                 className={`auth-field ${
                   passwordFocused || password ? 'auth-field--active' : ''
@@ -1064,16 +1031,7 @@ function Login({ onLogin }) {
                 </label>
                 <div className="auth-input-wrap">
                   <span className="auth-input-icon" aria-hidden="true">
-                    <svg
-                      width="18"
-                      height="18"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="5" y="11" width="14" height="10" rx="2" />
                       <path d="M8 11V7a4 4 0 0 1 8 0v4" />
                     </svg>
@@ -1121,7 +1079,6 @@ function Login({ onLogin }) {
                 )}
               </div>
 
-              {/* Forgot password link – only on login */}
               {mode === 'login' && (
                 <div className="auth-forgot-row">
                   <button
@@ -1134,7 +1091,6 @@ function Login({ onLogin }) {
                 </div>
               )}
 
-              {/* Confirm Password - Sign up only */}
               {mode === 'signup' && (
                 <div
                   className={`auth-field ${
@@ -1146,16 +1102,7 @@ function Login({ onLogin }) {
                   </label>
                   <div className="auth-input-wrap">
                     <span className="auth-input-icon" aria-hidden="true">
-                      <svg
-                        width="18"
-                        height="18"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.8"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                         <rect x="5" y="11" width="14" height="10" rx="2" />
                         <path d="M8 11V7a4 4 0 0 1 8 0v4" />
                       </svg>
@@ -1206,20 +1153,9 @@ function Login({ onLogin }) {
             </>
           )}
 
-          {/* ==================================================
-              GLOBAL FEEDBACK MESSAGES
-              ================================================== */}
           {error && (
             <div className="auth-alert auth-alert--error" role="alert">
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                aria-hidden="true"
-              >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                 <circle cx="12" cy="12" r="10" />
                 <line x1="12" y1="8" x2="12" y2="12" />
                 <line x1="12" y1="16" x2="12.01" y2="16" />
@@ -1230,15 +1166,7 @@ function Login({ onLogin }) {
 
           {message && (
             <div className="auth-alert auth-alert--success" role="status">
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                aria-hidden="true"
-              >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                 <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
                 <polyline points="22 4 12 14.01 9 11.01" />
               </svg>
@@ -1246,9 +1174,6 @@ function Login({ onLogin }) {
             </div>
           )}
 
-          {/* ==================================================
-              SUBMIT BUTTON
-              ================================================== */}
           <button
             type="submit"
             className={`auth-submit ${loading ? 'auth-submit--loading' : ''}`}
@@ -1284,59 +1209,38 @@ function Login({ onLogin }) {
           </button>
         </form>
 
-        {/* -------------------- Footer -------------------- */}
         <footer className="auth-footer">
           {mode === 'confirm' ? (
             <p>
               Wrong email?{' '}
-              <button
-                type="button"
-                className="auth-footer-link"
-                onClick={switchToSignup}
-              >
+              <button type="button" className="auth-footer-link" onClick={switchToSignup}>
                 Go back
               </button>
             </p>
           ) : mode === 'forgot' ? (
             <p>
               Remember your password?{' '}
-              <button
-                type="button"
-                className="auth-footer-link"
-                onClick={switchToLogin}
-              >
+              <button type="button" className="auth-footer-link" onClick={switchToLogin}>
                 Sign in
               </button>
             </p>
           ) : mode === 'reset' ? (
             <p>
-              <button
-                type="button"
-                className="auth-footer-link"
-                onClick={switchToLogin}
-              >
+              <button type="button" className="auth-footer-link" onClick={switchToLogin}>
                 Back to Sign In
               </button>
             </p>
           ) : mode === 'login' ? (
             <p>
               Don&apos;t have an account?{' '}
-              <button
-                type="button"
-                className="auth-footer-link"
-                onClick={switchToSignup}
-              >
+              <button type="button" className="auth-footer-link" onClick={switchToSignup}>
                 Create one
               </button>
             </p>
           ) : (
             <p>
               Already have an account?{' '}
-              <button
-                type="button"
-                className="auth-footer-link"
-                onClick={switchToLogin}
-              >
+              <button type="button" className="auth-footer-link" onClick={switchToLogin}>
                 Sign in
               </button>
             </p>
@@ -1344,29 +1248,29 @@ function Login({ onLogin }) {
 
           {mode === 'signup' && accountType === 'personal' && (
             <p className="auth-footer-note">
-              After creating an account you will receive a 6-digit confirmation code by email.
-              You must enter that code before you can sign in. Your inventory stays personal until you join or create an organization.
+              After creating an account you will receive a 6-digit confirmation code by email
+              (sent by Supabase Auth). You must enter that code before you can sign in.
             </p>
           )}
 
           {mode === 'signup' && accountType === 'organization' && (
             <p className="auth-footer-note">
-              After email confirmation you can finish creating your organization and invite team members.
-              You can still switch back to a personal workspace anytime.
+              Organization signup uses the same email confirmation as personal accounts.
+              After the 6-digit code is verified, you can create your organization and invite members.
             </p>
           )}
 
           {mode === 'login' && (
             <p className="auth-footer-note">
               {accountType === 'organization'
-                ? 'Organization members share inventory. Switch to Personal anytime from the header.'
+                ? 'Organization members share inventory. Personal and Organization are workspace modes of the same login.'
                 : 'Secure access for laboratory chemical inventory management'}
             </p>
           )}
 
           {mode === 'confirm' && (
             <p className="auth-footer-note">
-              The code expires after a short time. You can request a new one if needed.
+              The code is sent by Supabase (not Render). Check spam/junk. You can resend after the cooldown.
             </p>
           )}
 
