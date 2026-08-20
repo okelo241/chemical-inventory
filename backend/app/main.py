@@ -27,6 +27,8 @@ app = FastAPI(title="Chemical Inventory API")
 # CORS — must run early. Allow all Vercel preview/production hosts + local.
 # ---------------------------------------------------------------------------
 ALLOWED_ORIGINS = [
+    "https://labchemicalinventory.com",
+    "https://www.labchemicalinventory.com",
     "https://chemical-inventory-zihn.vercel.app",
     "https://chemicalinventory-three.vercel.app",
     "https://chemicalinventory-git-main-chemical-inventory.vercel.app",
