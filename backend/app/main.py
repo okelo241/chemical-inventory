@@ -25,6 +25,7 @@ app = FastAPI(title="Chemical Inventory API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://chemical-inventory-zihn.vercel.app",
         "https://chemicalinventory-three.vercel.app",
         "https://chemicalinventory-git-main-chemical-inventory.vercel.app",
         "http://localhost:5173",
