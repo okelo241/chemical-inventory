@@ -3886,26 +3886,7 @@ body {
 .incomp-row .reason {
   color: var(--text-muted);
 }
-.app-header {
-  position: relative;
-  z-index: 4000;
-}
 
-.header-menu-wrapper {
-  position: relative;
-  z-index: 5000;
-}
-
-.header-menu-dropdown {
-  z-index: 6000;
-}
-
-.workspace-switcher select {
-  border-radius: 999px;
-  font-weight: 600;
-  min-height: 36px;
-  padding: 8px 32px 8px 12px;
-}
 
 /* Tips */
 .tips-list {

@@ -957,13 +957,32 @@ function App() {
 
   const getAccessToken = useCallback(async () => {
     try {
-      const { data: { session: current } } = await supabase.auth.getSession()
-      return current?.access_token || null
+      const { data, error } = await supabase.auth.getSession()
+      if (error) {
+        console.warn('getSession error', error)
+        return null
+      }
+
+      const current = data?.session
+      if (!current?.access_token) return null
+
+      const expiresAt = current.expires_at
+      const now = Math.floor(Date.now() / 1000)
+      if (expiresAt && expiresAt - now < 60) {
+        const { data: refreshed, error: refreshError } =
+          await supabase.auth.refreshSession()
+        if (!refreshError && refreshed?.session?.access_token) {
+          return refreshed.session.access_token
+        }
+      }
+
+      return current.access_token
     } catch (error) {
       console.error('Error retrieving access token:', error)
       return null
     }
   }, [])
+
 
   /* ======================================================================== */
   /* IDLE AUTO-LOGOUT                                                         */
