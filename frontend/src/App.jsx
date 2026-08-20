@@ -829,6 +829,20 @@ function App() {
   const [showQrModal, setShowQrModal] = useState(null)
 
   /* ---------- Organizations / Workspace ---------- */
+  // Locked from Login intent: 'personal' | 'organization'
+  // Personal session hides org UI; organization session hides personal option.
+  const [accountMode, setAccountMode] = useState(() => {
+    try {
+      const saved = localStorage.getItem('accountMode')
+      if (saved === 'organization' || saved === 'personal') return saved
+      const intent = JSON.parse(localStorage.getItem('workspaceIntent') || 'null')
+      if (intent?.type === 'organization') return 'organization'
+      if (intent?.type === 'personal') return 'personal'
+    } catch {
+      // ignore
+    }
+    return 'personal'
+  })
   const [organizations, setOrganizations] = useState([])
   const [workspaceMode, setWorkspaceMode] = useState('personal') // 'personal' | 'organization'
   const [activeOrgId, setActiveOrgId] = useState(null)
@@ -923,6 +937,18 @@ function App() {
       setShowLanding(false)
       setNotifications([])
       setMainView('inventory')
+      setOrganizations([])
+      setActiveOrgId(null)
+      setActiveOrgName('')
+      setActiveOrgRole(null)
+      setAccountMode('personal')
+      try {
+        localStorage.removeItem('accountMode')
+        localStorage.removeItem('workspaceIntent')
+        localStorage.removeItem('workspace')
+      } catch {
+        // ignore
+      }
     } catch (error) {
       console.error('Logout error:', error)
       showMessage('error', 'Failed to log out properly')
@@ -1514,6 +1540,38 @@ function App() {
       fetchOrganizations()
     }
   }, [session, fetchChemicals, fetchTransactions, fetchOrganizations]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* Apply Login Personal / Organization intent once per session */
+  useEffect(() => {
+    if (!session) return
+    try {
+      const raw = localStorage.getItem('workspaceIntent')
+      if (raw) {
+        const intent = JSON.parse(raw)
+        localStorage.removeItem('workspaceIntent')
+        if (intent?.type === 'organization') {
+          setAccountMode('organization')
+          localStorage.setItem('accountMode', 'organization')
+          if (intent.organizationName) {
+            setNewOrgName(intent.organizationName)
+            setShowCreateOrg(true)
+          }
+        } else {
+          setAccountMode('personal')
+          localStorage.setItem('accountMode', 'personal')
+          switchWorkspace({ mode: 'personal', organization_id: null })
+        }
+        return
+      }
+      // No fresh intent — keep saved accountMode and enforce workspace
+      if (accountMode === 'personal') {
+        switchWorkspace({ mode: 'personal', organization_id: null })
+      }
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session])
 
   /* ======================================================================== */
   /* DERIVED COMPATIBILITY (must be early enough for effects)                 */
@@ -2292,7 +2350,7 @@ function App() {
       )}
 
       {/* Header */}
-      <header className="app-header">
+      <header className="app-header" style={{ position: 'relative', zIndex: 4000 }}>
         <div className="brand">
           <div className="brand-logo">
             <img src={appLogo} alt="Chemical Inventory" className="app-logo-img" />
@@ -2328,8 +2386,12 @@ function App() {
               )}
             </button>
 
-            {/* Overflow menu (⋯) for secondary actions */}
-            <div className="header-menu-wrapper" ref={headerMenuRef} style={{ position: 'relative' }}>
+            {/* Overflow menu (⋯) — high z-index so it sits above search/toolbar */}
+            <div
+              className="header-menu-wrapper"
+              ref={headerMenuRef}
+              style={{ position: 'relative', zIndex: 5000 }}
+            >
               <button
                 className={`tool-btn ${headerMenuOpen ? 'active' : ''}`}
                 onClick={() => setHeaderMenuOpen((v) => !v)}
@@ -2345,15 +2407,16 @@ function App() {
                   role="menu"
                   style={{
                     position: 'absolute',
-                    top: 'calc(100% + 6px)',
+                    top: 'calc(100% + 8px)',
                     right: 0,
-                    minWidth: 220,
-                    background: 'var(--panel, var(--bg-elevated, #fff))',
-                    border: '1px solid var(--border)',
+                    minWidth: 240,
+                    background: 'var(--panel, var(--bg-elevated, #ffffff))',
+                    color: 'var(--text, #0f172a)',
+                    border: '1px solid var(--border, #e2e8f0)',
                     borderRadius: 12,
-                    boxShadow: '0 10px 30px rgba(0,0,0,0.18)',
+                    boxShadow: '0 12px 40px rgba(15, 23, 42, 0.2)',
                     padding: 6,
-                    zIndex: 1000,
+                    zIndex: 6000,
                   }}
                 >
                   <button
@@ -2404,32 +2467,36 @@ function App() {
                   >
                     <span>ℹ️</span> Hazard legend
                   </button>
-                  <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="header-menu-item"
-                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
-                    onClick={() => {
-                      setShowCreateOrg(true)
-                      setHeaderMenuOpen(false)
-                    }}
-                  >
-                    <span>🏢</span> Create organization
-                  </button>
-                  {activeOrgId && (
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className="header-menu-item"
-                      style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
-                      onClick={() => {
-                        setShowInviteModal(true)
-                        setHeaderMenuOpen(false)
-                      }}
-                    >
-                      <span>✉️</span> Invite members
-                    </button>
+                  {accountMode === 'organization' && (
+                    <>
+                      <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="header-menu-item"
+                        style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                        onClick={() => {
+                          setShowCreateOrg(true)
+                          setHeaderMenuOpen(false)
+                        }}
+                      >
+                        <span>🏢</span> Create organization
+                      </button>
+                      {activeOrgId && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="header-menu-item"
+                          style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                          onClick={() => {
+                            setShowInviteModal(true)
+                            setHeaderMenuOpen(false)
+                          }}
+                        >
+                          <span>✉️</span> Invite members
+                        </button>
+                      )}
+                    </>
                   )}
                   <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
                   <button
@@ -2451,19 +2518,39 @@ function App() {
         </div>
 
         <div className="header-end">
-          {/* Personal / Organization workspace switch — keeps individual accounts working */}
-          <div className="workspace-switcher">
-            <select
-              value={
-                workspace?.mode === 'organization' && workspace?.organization_id
-                  ? `org-${workspace.organization_id}`
-                  : 'personal'
-              }
-              onChange={(e) => {
-                const v = e.target.value
-                if (v === 'personal') {
-                  switchWorkspace({ mode: 'personal', organization_id: null })
-                } else {
+          {/* Locked by Login intent: personal hides org UI; org hides personal option */}
+          <div className="workspace-switcher" style={{ display: 'flex', alignItems: 'center' }}>
+            {accountMode === 'personal' ? (
+              <div
+                title="Personal workspace"
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 999,
+                  border: '1px solid var(--border, #e2e8f0)',
+                  background: 'var(--panel, #fff)',
+                  color: 'var(--text, #0f172a)',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  minHeight: 36,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                👤 Personal
+              </div>
+            ) : (
+              <select
+                value={
+                  workspace?.mode === 'organization' && workspace?.organization_id
+                    ? `org-${workspace.organization_id}`
+                    : organizations[0]
+                      ? `org-${organizations[0].id}`
+                      : ''
+                }
+                onChange={(e) => {
+                  const v = e.target.value
+                  if (!v) return
                   const id = v.replace('org-', '')
                   const org = organizations.find((o) => String(o.id) === String(id))
                   switchWorkspace({
@@ -2472,18 +2559,37 @@ function App() {
                     name: org?.name,
                     role: org?.role,
                   })
-                }
-              }}
-              title="Workspace: Personal inventory or Organization shared inventory"
-            >
-              <option value="personal">👤 Personal</option>
-              {organizations.map((org) => (
-                <option key={org.id} value={`org-${org.id}`}>
-                  🏢 {org.name}
-                  {org.role ? ` (${org.role})` : ''}
-                </option>
-              ))}
-            </select>
+                }}
+                title="Organization workspace"
+                style={{
+                  appearance: 'none',
+                  WebkitAppearance: 'none',
+                  MozAppearance: 'none',
+                  padding: '8px 32px 8px 12px',
+                  borderRadius: 999,
+                  border: '1px solid var(--border, #e2e8f0)',
+                  background:
+                    'var(--panel, #fff) url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'12\' height=\'8\' viewBox=\'0 0 12 8\'%3E%3Cpath fill=\'%2364748b\' d=\'M1 1l5 5 5-5\'/%3E%3C/svg%3E") no-repeat right 12px center',
+                  color: 'var(--text, #0f172a)',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  lineHeight: 1.2,
+                  cursor: 'pointer',
+                  maxWidth: 220,
+                  minHeight: 36,
+                }}
+              >
+                {organizations.length === 0 && (
+                  <option value="">🏢 No organization yet</option>
+                )}
+                {organizations.map((org) => (
+                  <option key={org.id} value={`org-${org.id}`}>
+                    🏢 {org.name}
+                    {org.role ? ` (${org.role})` : ''}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           <button className="tool-btn theme-btn" onClick={toggleTheme} title="Toggle theme">
