@@ -1565,32 +1565,96 @@ function App() {
   /* Apply Login Personal / Organization intent once per session */
   useEffect(() => {
     if (!session) return
-    try {
-      const raw = localStorage.getItem('workspaceIntent')
-      if (raw) {
-        const intent = JSON.parse(raw)
-        localStorage.removeItem('workspaceIntent')
-        if (intent?.type === 'organization') {
-          setAccountMode('organization')
-          localStorage.setItem('accountMode', 'organization')
-          if (intent.organizationName) {
-            setNewOrgName(intent.organizationName)
-            setShowCreateOrg(true)
+
+    ;(async () => {
+      try {
+        // Prefer localStorage intent from Login; fall back to user_metadata
+        let intent = null
+        try {
+          const raw = localStorage.getItem('workspaceIntent')
+          if (raw) intent = JSON.parse(raw)
+        } catch {
+          intent = null
+        }
+
+        const meta = session.user?.user_metadata || {}
+        const type =
+          intent?.type ||
+          meta.account_type ||
+          accountMode ||
+          'personal'
+        const orgName = (
+          intent?.organizationName ||
+          meta.pending_org_name ||
+          ''
+        ).trim()
+
+        if (intent) {
+          try {
+            localStorage.removeItem('workspaceIntent')
+          } catch {
+            // ignore
           }
-        } else {
+        }
+
+        if (type !== 'organization') {
           setAccountMode('personal')
           localStorage.setItem('accountMode', 'personal')
           switchWorkspace({ mode: 'personal', organization_id: null })
+          return
         }
-        return
+
+        // Organization account
+        setAccountMode('organization')
+        localStorage.setItem('accountMode', 'organization')
+
+        const token = await getAccessToken()
+        if (!token) return
+
+        // Already a member of an org? use it
+        const listRes = await fetch(`${API_URL}/organizations`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        const orgs = listRes.ok ? await listRes.json() : []
+        setOrganizations(Array.isArray(orgs) ? orgs : [])
+
+        if (Array.isArray(orgs) && orgs.length > 0) {
+          switchToOrganization(orgs[0])
+          return
+        }
+
+        // First login: create org from signup name
+        if (!orgName || orgName.length < 2) {
+          setNewOrgName('')
+          setShowCreateOrg(true) // ask for name if missing
+          return
+        }
+
+        const createRes = await fetch(`${API_URL}/organizations`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ name: orgName }),
+        })
+
+        if (!createRes.ok) {
+          setNewOrgName(orgName)
+          setShowCreateOrg(true)
+          showMessage('error', 'Could not create organization automatically')
+          return
+        }
+
+        const org = await createRes.json()
+        setOrganizations([org])
+        switchToOrganization(org)
+        setShowCreateOrg(false)
+        showMessage('success', `Organization “${org.name}” is ready`)
+      } catch (err) {
+        console.warn('Org setup failed', err)
       }
-      // No fresh intent — keep saved accountMode and enforce workspace
-      if (accountMode === 'personal') {
-        switchWorkspace({ mode: 'personal', organization_id: null })
-      }
-    } catch {
-      // ignore
-    }
+    })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session])
 
