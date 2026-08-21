@@ -1077,24 +1077,75 @@ def invite_member(
         if existing_invite:
             return _invite_to_dict(existing_invite)
 
+        token = secrets.token_urlsafe(32)
+        model_cols = {c.name for c in models.OrganizationInvite.__table__.columns}
         kwargs = dict(
             organization_id=org_uuid,
             email=email,
             role=role,
             invited_by=str(user_id),
-            token=secrets.token_urlsafe(32),
+            token=token,
             status="pending",
         )
         lab_uuid = _parse_uuid(getattr(payload, "lab_unit_id", None))
-        if lab_uuid is not None and hasattr(models.OrganizationInvite, "lab_unit_id"):
+        if lab_uuid is not None and "lab_unit_id" in model_cols:
             kwargs["lab_unit_id"] = lab_uuid
-        if hasattr(models.OrganizationInvite, "expires_at"):
+        if "expires_at" in model_cols:
             kwargs["expires_at"] = datetime.now(timezone.utc) + timedelta(days=14)
+        kwargs = {k: v for k, v in kwargs.items() if k in model_cols}
 
-        invite = models.OrganizationInvite(**kwargs)
-        db.add(invite)
-        db.commit()
-        db.refresh(invite)
+        try:
+            invite = models.OrganizationInvite(**kwargs)
+            db.add(invite)
+            db.commit()
+            db.refresh(invite)
+        except Exception as orm_err:
+            db.rollback()
+            print("POST invite ORM insert failed, using SQL fallback:", repr(orm_err))
+            row = db.execute(
+                text(
+                    """
+                    INSERT INTO organization_invites
+                        (organization_id, email, role, invited_by, token, status)
+                    VALUES
+                        (:organization_id, :email, :role, :invited_by, :token, :status)
+                    RETURNING id, organization_id, email, role, status, token,
+                              invited_by, created_at, accepted_at
+                    """
+                ),
+                {
+                    "organization_id": str(org_uuid),
+                    "email": email,
+                    "role": role,
+                    "invited_by": str(user_id),
+                    "token": token,
+                    "status": "pending",
+                },
+            ).mappings().first()
+            db.commit()
+            if not row:
+                raise HTTPException(status_code=500, detail="Could not create invite")
+            write_audit(
+                db,
+                action="invite_create",
+                user_id=user_id,
+                user_email=user.get("email"),
+                organization_id=org_uuid,
+                detail={"email": email, "role": role},
+            )
+            return {
+                "id": str(row["id"]),
+                "organization_id": str(row["organization_id"]),
+                "email": row["email"],
+                "role": row["role"],
+                "status": row["status"],
+                "token": row["token"],
+                "invited_by": row["invited_by"],
+                "lab_unit_id": None,
+                "expires_at": None,
+                "created_at": _as_datetime_iso(row.get("created_at")),
+                "accepted_at": _as_datetime_iso(row.get("accepted_at")),
+            }
 
         write_audit(
             db,

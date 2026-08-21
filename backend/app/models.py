@@ -12,7 +12,6 @@ from sqlalchemy import (
     ForeignKey,
     UniqueConstraint,
     Index,
-    JSON,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, UUID, JSONB
 from sqlalchemy.sql import func
@@ -32,34 +31,7 @@ class Organization(Base):
     slug = Column(String, unique=True, nullable=True, index=True)
     created_by = Column(String, nullable=True, index=True)  # Supabase auth user id
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    # Phase B/C optional org settings
     settings = Column(JSONB, nullable=True)  # e.g. {"sds_review_months": 12}
-
-
-class OrganizationMember(Base):
-    __tablename__ = "organization_members"
-    __table_args__ = (
-        UniqueConstraint("organization_id", "user_id", name="uq_org_member"),
-    )
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    organization_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("organizations.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    user_id = Column(String, nullable=False, index=True)
-    # Phase B richer roles: owner | admin | ehs | member | viewer
-    role = Column(String, nullable=False, default="member")
-    # Optional lab unit assignment within the org
-    lab_unit_id = Column(
-        UUID(as_uuid=True),
-        ForeignKey("lab_units.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    joined_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class LabUnit(Base):
@@ -83,6 +55,31 @@ class LabUnit(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class OrganizationMember(Base):
+    __tablename__ = "organization_members"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "user_id", name="uq_org_member"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(String, nullable=False, index=True)
+    # owner | admin | ehs | member | viewer
+    role = Column(String, nullable=False, default="member")
+    lab_unit_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("lab_units.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    joined_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class OrganizationInvite(Base):
     __tablename__ = "organization_invites"
 
@@ -94,7 +91,7 @@ class OrganizationInvite(Base):
         index=True,
     )
     email = Column(String, nullable=False, index=True)
-    role = Column(String, nullable=False, default="member")  # member | admin | ehs | viewer
+    role = Column(String, nullable=False, default="member")
     lab_unit_id = Column(
         UUID(as_uuid=True),
         ForeignKey("lab_units.id", ondelete="SET NULL"),
@@ -102,7 +99,7 @@ class OrganizationInvite(Base):
     )
     invited_by = Column(String, nullable=True)
     token = Column(String, unique=True, nullable=False, index=True)
-    status = Column(String, nullable=False, default="pending")  # pending | accepted | revoked | expired
+    status = Column(String, nullable=False, default="pending")
     expires_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     accepted_at = Column(DateTime(timezone=True), nullable=True)
@@ -120,9 +117,7 @@ class Chemical(Base):
     cas_number = Column(String, index=True, nullable=True)
     quantity = Column(Float, default=0.0)
     unit = Column(String, default="g")
-    # Full path string: "Building / Room / Cabinet / Shelf" (Phase A hierarchy)
     location = Column(String, nullable=True)
-    # Optional structured location parts (Phase A)
     loc_building = Column(String, nullable=True)
     loc_room = Column(String, nullable=True)
     loc_cabinet = Column(String, nullable=True)
@@ -132,7 +127,6 @@ class Chemical(Base):
     min_stock = Column(Float, default=0.0)
     hazard_notes = Column(Text, nullable=True)
     sds_filename = Column(String, nullable=True)
-    # Phase A — SDS review
     sds_reviewed_at = Column(Date, nullable=True)
     sds_review_months = Column(Integer, default=12)
 
@@ -143,7 +137,6 @@ class Chemical(Base):
     supplier = Column(String, nullable=True)
     barcode = Column(String, nullable=True, index=True)
 
-    # Container-level tracking (multiple bottles of same CAS)
     container_code = Column(String, nullable=True, index=True)
     parent_chemical_id = Column(
         Integer,
@@ -152,12 +145,10 @@ class Chemical(Base):
         index=True,
     )
 
-    # Archive vs hard delete (Phase A / competitive)
     archived = Column(Boolean, default=False, nullable=False, index=True)
     archived_at = Column(DateTime(timezone=True), nullable=True)
     archived_by = Column(String, nullable=True)
 
-    # Legacy collection flag
     in_collection = Column(Boolean, default=False)
 
     user_id = Column(String, nullable=True, index=True)
@@ -167,7 +158,6 @@ class Chemical(Base):
         nullable=True,
         index=True,
     )
-    # Phase B lab unit scope
     lab_unit_id = Column(
         UUID(as_uuid=True),
         ForeignKey("lab_units.id", ondelete="SET NULL"),
@@ -212,8 +202,6 @@ class AuditEvent(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     action = Column(String, nullable=False, index=True)
-    # e.g. chemical_create | chemical_update | chemical_delete | chemical_archive |
-    # invite_create | invite_accept | waste_logged | sds_reviewed | account_delete_requested
 
     user_id = Column(String, nullable=True, index=True)
     user_email = Column(String, nullable=True)
@@ -222,7 +210,6 @@ class AuditEvent(Base):
 
     chemical_id = Column(Integer, nullable=True, index=True)
     chemical_name = Column(String, nullable=True)
-    # Free-form payload (location, quantity delta, invite email, etc.)
     detail = Column(JSONB, nullable=True)
 
 
@@ -253,13 +240,13 @@ class WasteLog(Base):
     chemical_name = Column(String, nullable=True)
     quantity = Column(Float, nullable=True)
     unit = Column(String, nullable=True)
-    reason = Column(String, nullable=True)  # expired | spill | clean-out | other
+    reason = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
-    disposition = Column(String, nullable=True)  # hazardous_waste | sink | recycle | vendor
+    disposition = Column(String, nullable=True)
 
 
 # =============================================================================
-# Phase B — Notification channels (email / webhook / slack URL, etc.)
+# Phase B — Notification channels
 # =============================================================================
 
 class NotificationChannel(Base):
@@ -272,12 +259,9 @@ class NotificationChannel(Base):
         nullable=False,
         index=True,
     )
-    # email | webhook | slack
     channel_type = Column(String, nullable=False, default="email")
     name = Column(String, nullable=True)
-    # destination: email address or webhook URL
     target = Column(String, nullable=False)
-    # events: low_stock | expiry | invite | audit
     events = Column(ARRAY(String), nullable=True)
     enabled = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -288,8 +272,6 @@ class NotificationChannel(Base):
 # =============================================================================
 
 class TrainingRequirement(Base):
-    """Org-level training module required for certain chemical classes or actions."""
-
     __tablename__ = "training_requirements"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -299,12 +281,10 @@ class TrainingRequirement(Base):
         nullable=False,
         index=True,
     )
-    code = Column(String, nullable=False)  # e.g. "HF_SAFETY"
+    code = Column(String, nullable=False)
     title = Column(String, nullable=False)
     description = Column(Text, nullable=True)
-    # chemical_classes that require this training
     required_classes = Column(ARRAY(String), nullable=True)
-    # actions gated: take | dispose | order
     required_actions = Column(ARRAY(String), nullable=True)
     valid_months = Column(Integer, default=12)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -349,9 +329,7 @@ class PurchaseOrder(Base):
     )
     lab_unit_id = Column(UUID(as_uuid=True), nullable=True)
     created_by = Column(String, nullable=True, index=True)
-    status = Column(
-        String, nullable=False, default="draft"
-    )  # draft | submitted | ordered | received | cancelled
+    status = Column(String, nullable=False, default="draft")
     supplier = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -377,14 +355,11 @@ class PurchaseOrderItem(Base):
     quantity = Column(Float, nullable=True)
     unit = Column(String, nullable=True)
     catalog_number = Column(String, nullable=True)
-    # link after receiving into inventory
     received_chemical_id = Column(Integer, nullable=True)
     notes = Column(Text, nullable=True)
 
 
 class ReceivingRecord(Base):
-    """Goods-receipt against a PO or ad-hoc delivery."""
-
     __tablename__ = "receiving_records"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -417,8 +392,6 @@ class ReceivingRecord(Base):
 # =============================================================================
 
 class OrganizationSsoConfig(Base):
-    """Store org SSO preferences; actual OIDC/SAML is configured in Supabase Auth."""
-
     __tablename__ = "organization_sso_configs"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -429,8 +402,8 @@ class OrganizationSsoConfig(Base):
         unique=True,
         index=True,
     )
-    provider = Column(String, nullable=True)  # google | azure | okta | custom
-    domain = Column(String, nullable=True)  # enforced email domain
+    provider = Column(String, nullable=True)
+    domain = Column(String, nullable=True)
     enforce_sso = Column(Boolean, default=False)
     metadata = Column(JSONB, nullable=True)
     updated_at = Column(
@@ -445,8 +418,6 @@ class OrganizationSsoConfig(Base):
 # =============================================================================
 
 class DeviceSyncState(Base):
-    """Track last successful sync per device for offline-first clients."""
-
     __tablename__ = "device_sync_states"
     __table_args__ = (
         UniqueConstraint("user_id", "device_id", name="uq_user_device_sync"),
@@ -457,7 +428,7 @@ class DeviceSyncState(Base):
     device_id = Column(String, nullable=False)
     organization_id = Column(UUID(as_uuid=True), nullable=True)
     last_sync_at = Column(DateTime(timezone=True), nullable=True)
-    last_cursor = Column(String, nullable=True)  # opaque revision / updated_at watermark
+    last_cursor = Column(String, nullable=True)
     client_info = Column(JSONB, nullable=True)
     updated_at = Column(
         DateTime(timezone=True),
@@ -467,7 +438,7 @@ class DeviceSyncState(Base):
 
 
 # =============================================================================
-# Transactions (persist usage take/return/adjust — replaces in-memory list)
+# Transactions (persist usage take/return/adjust)
 # =============================================================================
 
 class InventoryTransaction(Base):
@@ -484,7 +455,6 @@ class InventoryTransaction(Base):
         index=True,
     )
     chemical_name = Column(String, nullable=True)
-    # take | return | adjust
     type = Column(String, nullable=False)
     quantity_change = Column(Float, nullable=True)
     quantity_before = Column(Float, nullable=True)

@@ -189,7 +189,7 @@ class WorkspaceContext(BaseModel):
     lab_unit_id: Optional[UUID] = None
 
 
-# ---------- Lab units (Phase B) ----------
+# ---------- Lab units ----------
 
 class LabUnitCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
