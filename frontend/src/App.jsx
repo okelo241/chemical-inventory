@@ -1226,6 +1226,7 @@ function App() {
         localStorage.removeItem('accountMode')
         localStorage.removeItem('workspaceIntent')
         localStorage.removeItem('workspace')
+        localStorage.removeItem('pendingInviteToken')
       } catch {
         // ignore
       }
@@ -1289,15 +1290,29 @@ function App() {
     }
   }, [session]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Accept organization invite from URL token OR pendingInviteToken (from Login)
   useEffect(() => {
     if (!session) return
+
     const params = new URLSearchParams(window.location.search)
-    const token = params.get('token')
+    const urlToken = (params.get('token') || '').trim()
+    let storedToken = ''
+    try {
+      storedToken = (localStorage.getItem('pendingInviteToken') || '').trim()
+    } catch {
+      storedToken = ''
+    }
+
+    const token = urlToken || storedToken
     if (!token) return
+
+    let cancelled = false
 
     ;(async () => {
       try {
         const access = await getAccessToken()
+        if (!access || cancelled) return
+
         const res = await fetch(`${API_URL}/invites/accept`, {
           method: 'POST',
           headers: {
@@ -1306,20 +1321,42 @@ function App() {
           },
           body: JSON.stringify({ token }),
         })
-        if (!res.ok) return
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => '')
+          console.warn('Accept invite failed', res.status, text)
+          return
+        }
+
         const org = await res.json()
+        if (cancelled) return
+
+        try {
+          localStorage.removeItem('pendingInviteToken')
+        } catch {
+          // ignore
+        }
+
         await fetchOrganizations()
         switchWorkspace({
           mode: 'organization',
-          organization_id: org.id,
+          organization_id: org.id || org.organization_id,
+          name: org.name,
+          role: org.role,
         })
-        showMessage('success', `Joined ${org.name}`)
+        setAccountMode('organization')
+        localStorage.setItem('accountMode', 'organization')
+        showMessage('success', `Joined ${org.name || 'organization'}`)
         window.history.replaceState({}, '', window.location.pathname)
       } catch (err) {
         console.warn('Accept invite failed', err)
       }
     })()
-  }, [session])
+
+    return () => {
+      cancelled = true
+    }
+  }, [session]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // NOTE: Do NOT call fetchChemicals / fetchOrganizations here in dependency
   // arrays before those functions are declared (TDZ → "Cannot access before
@@ -2157,7 +2194,7 @@ function App() {
           }
         }
 
-        if (type !== 'organization') {
+                if (type !== 'organization') {
           setAccountMode('personal')
           localStorage.setItem('accountMode', 'personal')
           switchWorkspace({ mode: 'personal', organization_id: null })
@@ -2166,6 +2203,59 @@ function App() {
 
         setAccountMode('organization')
         localStorage.setItem('accountMode', 'organization')
+
+        // Invite token has priority (handled by the other effect)
+        let pendingToken = ''
+        try {
+          pendingToken = (localStorage.getItem('pendingInviteToken') || '').trim()
+        } catch {
+          pendingToken = ''
+        }
+        if (pendingToken || intent?.inviteToken) {
+          // invite effect will switch workspace after accept
+          return
+        }
+
+        const orgs = (await fetchOrganizations()) || organizations || []
+        const list = Array.isArray(orgs) ? orgs : []
+
+        // Match by organization name from Login (org login mode)
+        if (orgName) {
+          const needle = orgName.toLowerCase()
+          const match = list.find((o) => {
+            const n = String(o.name || '').toLowerCase()
+            const slug = String(o.slug || '').toLowerCase()
+            return n === needle || slug === needle || n.includes(needle)
+          })
+          if (match) {
+            switchWorkspace({
+              mode: 'organization',
+              organization_id: match.id,
+              name: match.name,
+              role: match.role,
+            })
+            return
+          }
+        }
+
+        // If user already belongs to orgs, open first
+        if (list.length > 0) {
+          const first = list[0]
+          switchWorkspace({
+            mode: 'organization',
+            organization_id: first.id,
+            name: first.name,
+            role: first.role,
+          })
+          return
+        }
+
+        // Owner creating a brand-new organization
+        if (orgName && orgName.length >= 2) {
+          setNewOrgName(orgName)
+          setShowCreateOrg(true)
+          return
+        }
 
         const token = await getAccessToken()
         if (!token) return
