@@ -3,16 +3,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from typing import List, Optional, Set, Any, Dict
 from datetime import datetime, timezone, date, timedelta
 from uuid import UUID
 import os
 import re
 import secrets
+import time
+
+import jwt
 
 from supabase import create_client, Client
-
-from . import models, schemas
+from functools import lru_cache
+from . import models, schemas           
 from .database import engine, get_db
 
 try:
@@ -203,21 +207,104 @@ def chemical_to_dict(r: Any) -> dict:
     }
 
 
-def get_current_user(
-    authorization: Optional[str] = Header(None),
-) -> Dict[str, Any]:
-    """Return {id, email} from Bearer JWT."""
+# ========== Auth (local JWT verify + short cache) ==========
+SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET") or ""
+
+# token -> (expires_monotonic, user_dict)
+_TOKEN_CACHE: dict = {}
+_TOKEN_CACHE_TTL_SEC = 60
+_TOKEN_CACHE_MAX = 512
+
+
+def _cache_get(token: str):
+    item = _TOKEN_CACHE.get(token)
+    if not item:
+        return None
+    expires_at, user = item
+    if time.monotonic() > expires_at:
+        _TOKEN_CACHE.pop(token, None)
+        return None
+    return user
+
+
+def _cache_set(token: str, user: dict) -> None:
+    if len(_TOKEN_CACHE) >= _TOKEN_CACHE_MAX:
+        for k in list(_TOKEN_CACHE.keys())[:64]:
+            _TOKEN_CACHE.pop(k, None)
+    _TOKEN_CACHE[token] = (time.monotonic() + _TOKEN_CACHE_TTL_SEC, user)
+
+
+def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
+    """
+    Validate Supabase access token locally with JWT secret.
+    Falls back to supabase.auth.get_user only if SUPABASE_JWT_SECRET is unset.
+    """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing authorization token")
+
+    token = authorization.replace("Bearer ", "").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing authorization token")
+
+    cached = _cache_get(token)
+    if cached is not None:
+        return cached
+
+    # --- Preferred: local HS256 verify ---
+    if SUPABASE_JWT_SECRET:
+        try:
+            try:
+                payload = jwt.decode(
+                    token,
+                    SUPABASE_JWT_SECRET,
+                    algorithms=["HS256"],
+                    audience="authenticated",
+                    options={"require": ["exp", "sub"]},
+                )
+            except jwt.InvalidAudienceError:
+                payload = jwt.decode(
+                    token,
+                    SUPABASE_JWT_SECRET,
+                    algorithms=["HS256"],
+                    options={"require": ["exp", "sub"], "verify_aud": False},
+                )
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=401, detail="Token expired")
+        except jwt.PyJWTError as e:
+            print("Auth error (JWT):", e)
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+        email = payload.get("email")
+        if not email and isinstance(payload.get("user_metadata"), dict):
+            email = payload["user_metadata"].get("email")
+
+        result = {
+            "id": str(user_id),
+            "email": email,
+            "role": payload.get("role"),
+        }
+        _cache_set(token, result)
+        return result
+
+    # --- Fallback: remote get_user (only if secret not configured) ---
     if supabase is None:
         raise HTTPException(status_code=500, detail="Supabase is not configured")
-    token = authorization.replace("Bearer ", "").strip()
+
     try:
         user_response = supabase.auth.get_user(token)
         user = user_response.user
         if not user or not user.id:
             raise HTTPException(status_code=401, detail="Invalid token")
-        return {"id": str(user.id), "email": getattr(user, "email", None)}
+        result = {
+            "id": str(user.id),
+            "email": getattr(user, "email", None),
+        }
+        _cache_set(token, result)
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -1331,45 +1418,48 @@ def list_waste_logs(
 # Transactions (DB-backed with in-memory fallback)
 # ---------------------------------------------------------------------------
 
-_TRANSACTIONS: list = []
-
-
 @app.get("/transactions")
 def get_transactions(
     organization_id: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
-    if hasattr(models, "InventoryTransaction"):
-        try:
-            q = db.query(models.InventoryTransaction).filter(
-                models.InventoryTransaction.user_id == str(user_id)
-            )
-            org_uuid = _parse_uuid(organization_id)
-            if org_uuid:
-                q = q.filter(models.InventoryTransaction.organization_id == org_uuid)
-            rows = q.order_by(models.InventoryTransaction.created_at.desc()).limit(500).all()
-            return [
-                {
-                    "id": str(r.id),
-                    "user_id": r.user_id,
-                    "user_email": r.user_email,
-                    "organization_id": str(r.organization_id) if r.organization_id else None,
-                    "chemical_id": r.chemical_id,
-                    "chemical_name": r.chemical_name,
-                    "type": r.type,
-                    "quantity_change": r.quantity_change,
-                    "quantity_before": r.quantity_before,
-                    "quantity_after": r.quantity_after,
-                    "unit": r.unit,
-                    "notes": r.notes,
-                    "created_at": _as_datetime_iso(r.created_at),
-                }
-                for r in rows
-            ]
-        except Exception as e:
-            print("DB transactions fallback:", e)
-    return [t for t in _TRANSACTIONS if t.get("user_id") == user_id]
+    if not hasattr(models, "InventoryTransaction"):
+        raise HTTPException(status_code=501, detail="Transactions table missing")
+
+    q = db.query(models.InventoryTransaction).filter(
+        models.InventoryTransaction.user_id == str(user_id)
+    )
+    org_uuid = _parse_uuid(organization_id)
+    if org_uuid:
+        q = q.filter(models.InventoryTransaction.organization_id == org_uuid)
+
+    rows = (
+        q.order_by(models.InventoryTransaction.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": str(r.id),
+            "user_id": r.user_id,
+            "user_email": r.user_email,
+            "organization_id": str(r.organization_id) if r.organization_id else None,
+            "chemical_id": r.chemical_id,
+            "chemical_name": r.chemical_name,
+            "type": r.type,
+            "quantity_change": r.quantity_change,
+            "quantity_before": r.quantity_before,
+            "quantity_after": r.quantity_after,
+            "unit": r.unit,
+            "notes": r.notes,
+            "created_at": _as_datetime_iso(r.created_at),
+        }
+        for r in rows
+    ]
 
 
 @app.post("/transactions")
@@ -1378,54 +1468,52 @@ def create_transaction(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    user_id = user["id"]
-    if hasattr(models, "InventoryTransaction"):
-        try:
-            row = models.InventoryTransaction(
-                user_id=user_id,
-                user_email=user.get("email"),
-                organization_id=_parse_uuid(payload.get("organization_id")),
-                chemical_id=payload.get("chemical_id"),
-                chemical_name=payload.get("chemical_name"),
-                type=payload.get("type") or "take",
-                quantity_change=payload.get("quantity_change"),
-                quantity_before=payload.get("quantity_before"),
-                quantity_after=payload.get("quantity_after"),
-                unit=payload.get("unit"),
-                notes=payload.get("notes"),
-            )
-            db.add(row)
-            db.commit()
-            db.refresh(row)
-            return {
-                "id": str(row.id),
-                "user_id": row.user_id,
-                "user_email": row.user_email,
-                "chemical_id": row.chemical_id,
-                "chemical_name": row.chemical_name,
-                "type": row.type,
-                "quantity_change": row.quantity_change,
-                "quantity_before": row.quantity_before,
-                "quantity_after": row.quantity_after,
-                "unit": row.unit,
-                "notes": row.notes,
-                "created_at": _as_datetime_iso(row.created_at),
-            }
-        except Exception as e:
-            db.rollback()
-            print("DB transaction write fallback:", e)
+    if not hasattr(models, "InventoryTransaction"):
+        raise HTTPException(status_code=501, detail="Transactions table missing")
 
-    mem = {
-        "id": f"tx-{len(_TRANSACTIONS) + 1}",
-        "user_id": user_id,
-        **payload,
+    row = models.InventoryTransaction(
+        user_id=user["id"],
+        user_email=user.get("email"),
+        organization_id=_parse_uuid(payload.get("organization_id")),
+        chemical_id=payload.get("chemical_id"),
+        chemical_name=payload.get("chemical_name"),
+        type=payload.get("type") or "take",
+        quantity_change=payload.get("quantity_change"),
+        quantity_before=payload.get("quantity_before"),
+        quantity_after=payload.get("quantity_after"),
+        unit=payload.get("unit"),
+        notes=payload.get("notes"),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {
+        "id": str(row.id),
+        "user_id": row.user_id,
+        "chemical_id": row.chemical_id,
+        "chemical_name": row.chemical_name,
+        "type": row.type,
+        "quantity_change": row.quantity_change,
+        "quantity_before": row.quantity_before,
+        "quantity_after": row.quantity_after,
+        "unit": row.unit,
+        "notes": row.notes,
+        "created_at": _as_datetime_iso(row.created_at),
     }
-    if "created_at" not in mem:
-        mem["created_at"] = datetime.now(timezone.utc).isoformat()
-    _TRANSACTIONS.insert(0, mem)
-    return mem
 
-
+@app.get("/health")
+def health(db: Session = Depends(get_db)):
+    db_ok = False
+    try:
+        db.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception as e:
+        print("health db error:", e)
+    status = 200 if db_ok else 503
+    return JSONResponse(
+        status_code=status,
+        content={"ok": db_ok, "db": db_ok, "cors": "enabled"},
+    )
 # ---------------------------------------------------------------------------
 # Account delete
 # ---------------------------------------------------------------------------

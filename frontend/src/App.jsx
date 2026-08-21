@@ -375,10 +375,12 @@ const sdsReviewDueDate = (reviewedAt, months = SDS_REVIEW_DEFAULT_MONTHS) => {
 
 const isSdsReviewOverdue = (chemical) => {
   const meta = getChemMeta(chemical?.id)
-  const reviewed = meta.sds_reviewed_at || chemical?.sds_reviewed_at
-  if (!chemical?.sds_filename && !reviewed) return true // missing SDS counts as overdue for report
-  if (!reviewed) return Boolean(chemical?.sds_filename) // has file but never reviewed
-  const due = sdsReviewDueDate(reviewed, meta.sds_review_months || SDS_REVIEW_DEFAULT_MONTHS)
+  const reviewed = chemical?.sds_reviewed_at || meta.sds_reviewed_at
+  if (!chemical?.sds_filename && !reviewed) return true
+  if (!reviewed) return Boolean(chemical?.sds_filename)
+  const months =
+    chemical?.sds_review_months || meta.sds_review_months || SDS_REVIEW_DEFAULT_MONTHS
+  const due = sdsReviewDueDate(reviewed, months)
   if (!due) return false
   return daysUntil(due) !== null && daysUntil(due) < 0
 }
@@ -1237,9 +1239,28 @@ function App() {
   }
 
   const getAccessToken = useCallback(async () => {
+    const tokenExpiresSoon = (accessToken, skewSec = 90) => {
+      if (!accessToken) return true
+      try {
+        const part = accessToken.split('.')[1]
+        if (!part) return true
+        const b64 = part.replace(/-/g, '+').replace(/_/g, '/')
+        const payload = JSON.parse(atob(b64))
+        if (!payload.exp) return true
+        return payload.exp * 1000 < Date.now() + skewSec * 1000
+      } catch {
+        return true
+      }
+    }
+
     try {
       const { data: { session: current } } = await supabase.auth.getSession()
-      return current?.access_token || null
+      let sess = current
+      if (!sess?.access_token || tokenExpiresSoon(sess.access_token)) {
+        const { data, error } = await supabase.auth.refreshSession()
+        if (!error && data?.session) sess = data.session
+      }
+      return sess?.access_token || null
     } catch (error) {
       console.error('Error retrieving access token:', error)
       return null
@@ -1563,9 +1584,11 @@ function App() {
       else setRefreshing(true)
       const token = await getAccessToken()
       if (!token) throw new Error('No access token available')
-      const chemicalsUrl = activeOrgId
-        ? `${API_URL}/chemicals?organization_id=${activeOrgId}`
-        : `${API_URL}/chemicals`
+      const params = new URLSearchParams()
+      if (activeOrgId) params.set('organization_id', activeOrgId)
+      if (showArchived) params.set('include_archived', 'true')
+      const qs = params.toString()
+      const chemicalsUrl = `${API_URL}/chemicals${qs ? `?${qs}` : ''}`
       const response = await fetch(chemicalsUrl, {
         headers: { Authorization: `Bearer ${token}` },
       })
@@ -1579,7 +1602,7 @@ function App() {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [API_URL, getAccessToken, showMessage, activeOrgId])
+  }, [API_URL, getAccessToken, showMessage, activeOrgId, showArchived])
 
   const fetchOrgMembers = useCallback(async (organizationId) => {
     if (!organizationId) {
@@ -1616,6 +1639,47 @@ function App() {
       console.warn('fetchOrgInvites error:', err)
     }
   }, [API_URL, getAccessToken])
+
+  const fetchAuditEvents = useCallback(async () => {
+    try {
+      const token = await getAccessToken()
+      if (!token) return
+      const params = new URLSearchParams()
+      if (activeOrgId) params.set('organization_id', activeOrgId)
+      params.set('limit', '200')
+      const res = await fetch(`${API_URL}/audit?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) throw new Error('audit fetch failed')
+      const data = await res.json()
+      const rows = (Array.isArray(data) ? data : []).map((ev) => ({
+        ...ev,
+        at: ev.at || ev.created_at,
+      }))
+      setAuditEvents(rows)
+    } catch (e) {
+      console.warn('GET /audit failed, using local log', e)
+      setAuditEvents(loadJsonStorage(AUDIT_STORAGE_KEY, []))
+    }
+  }, [API_URL, getAccessToken, activeOrgId])
+
+  const fetchWasteLog = useCallback(async () => {
+    try {
+      const token = await getAccessToken()
+      if (!token) return
+      const params = new URLSearchParams()
+      if (activeOrgId) params.set('organization_id', activeOrgId)
+      const res = await fetch(`${API_URL}/waste?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) throw new Error('waste fetch failed')
+      const data = await res.json()
+      setWasteLog(Array.isArray(data) ? data : [])
+    } catch (e) {
+      console.warn('GET /waste failed, using local', e)
+      setWasteLog(loadJsonStorage(WASTE_STORAGE_KEY, []))
+    }
+  }, [API_URL, getAccessToken, activeOrgId])
 
   const pushAudit = useCallback((action, detail = {}) => {
     const row = appendAuditEvent({
@@ -1695,40 +1759,79 @@ function App() {
 
   const handleArchiveChemical = async (chemical) => {
     if (!chemical?.id) return
-    setChemMeta(chemical.id, { archived: true })
-    pushAudit('chemical_archive', {
-      chemical_id: chemical.id,
-      chemical_name: chemical.name,
-    })
-    showMessage('success', `"${chemical.name}" archived (history kept)`)
-    // Force re-render filter
-    setChemicals((prev) => [...prev])
+    try {
+      const token = await getAccessToken()
+      const res = await fetch(`${API_URL}/chemicals/${chemical.id}/archive`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) throw new Error('Archive failed')
+      const updated = await res.json().catch(() => null)
+      if (updated?.id) {
+        setChemicals((prev) => prev.map((c) => (c.id === updated.id ? { ...c, ...updated } : c)))
+      } else {
+        fetchChemicals(true)
+      }
+      showMessage('success', `"${chemical.name}" archived (history kept)`)
+    } catch (e) {
+      console.warn(e)
+      setChemMeta(chemical.id, { archived: true })
+      setChemicals((prev) => [...prev])
+      showMessage('error', 'Archived locally — server archive failed')
+    }
   }
 
-  const handleUnarchiveChemical = (chemical) => {
+  const handleUnarchiveChemical = async (chemical) => {
     if (!chemical?.id) return
-    setChemMeta(chemical.id, { archived: false })
-    pushAudit('chemical_unarchive', {
-      chemical_id: chemical.id,
-      chemical_name: chemical.name,
-    })
-    showMessage('success', `"${chemical.name}" restored`)
-    setChemicals((prev) => [...prev])
+    try {
+      const token = await getAccessToken()
+      const res = await fetch(`${API_URL}/chemicals/${chemical.id}/unarchive`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) throw new Error('Unarchive failed')
+      const updated = await res.json().catch(() => null)
+      if (updated?.id) {
+        setChemicals((prev) => prev.map((c) => (c.id === updated.id ? { ...c, ...updated } : c)))
+      } else {
+        fetchChemicals(true)
+      }
+      showMessage('success', `"${chemical.name}" restored`)
+    } catch (e) {
+      setChemMeta(chemical.id, { archived: false })
+      setChemicals((prev) => [...prev])
+      showMessage('error', 'Restored locally — server unarchive failed')
+    }
   }
 
-  const handleMarkSdsReviewed = (chemical) => {
+  const handleMarkSdsReviewed = async (chemical) => {
     if (!chemical?.id) return
-    const today = new Date().toISOString().slice(0, 10)
-    setChemMeta(chemical.id, {
-      sds_reviewed_at: today,
-      sds_review_months: SDS_REVIEW_DEFAULT_MONTHS,
-    })
-    pushAudit('sds_reviewed', { chemical_id: chemical.id, chemical_name: chemical.name })
-    showMessage('success', `SDS marked reviewed for ${chemical.name}`)
-    setChemicals((prev) => [...prev])
+    try {
+      const token = await getAccessToken()
+      const res = await fetch(
+        `${API_URL}/chemicals/${chemical.id}/sds-reviewed?months=${SDS_REVIEW_DEFAULT_MONTHS}`,
+        { method: 'POST', headers: { Authorization: `Bearer ${token}` } }
+      )
+      if (!res.ok) throw new Error('SDS review failed')
+      const updated = await res.json().catch(() => null)
+      if (updated?.id) {
+        setChemicals((prev) => prev.map((c) => (c.id === updated.id ? { ...c, ...updated } : c)))
+      } else {
+        fetchChemicals(true)
+      }
+      showMessage('success', `SDS marked reviewed for ${chemical.name}`)
+    } catch (e) {
+      const today = new Date().toISOString().slice(0, 10)
+      setChemMeta(chemical.id, {
+        sds_reviewed_at: today,
+        sds_review_months: SDS_REVIEW_DEFAULT_MONTHS,
+      })
+      setChemicals((prev) => [...prev])
+      showMessage('error', 'Saved SDS review locally — server call failed')
+    }
   }
 
-  const handleLogWaste = () => {
+  const handleLogWaste = async () => {
     const chem = chemicals.find((c) => String(c.id) === String(wasteForm.chemical_id))
     if (!chem) {
       showMessage('error', 'Select a chemical')
@@ -1739,30 +1842,49 @@ function App() {
       showMessage('error', 'Enter a waste quantity')
       return
     }
-    const entry = {
-      id: `waste-${Date.now()}`,
-      at: new Date().toISOString(),
-      chemical_id: chem.id,
-      chemical_name: chem.name,
-      quantity: qty,
-      unit: wasteForm.unit || chem.unit || 'g',
-      reason: wasteForm.reason || 'disposal',
-      notes: wasteForm.notes || '',
-      user_email: session?.user?.email || '',
-      organization_id: activeOrgId || null,
+    try {
+      const token = await getAccessToken()
+      const res = await fetch(`${API_URL}/waste`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          chemical_id: chem.id,
+          chemical_name: chem.name,
+          quantity: qty,
+          unit: wasteForm.unit || chem.unit || 'g',
+          reason: wasteForm.reason || 'disposal',
+          notes: wasteForm.notes || '',
+          organization_id: activeOrgId || null,
+        }),
+      })
+      if (!res.ok) throw new Error('waste post failed')
+      await fetchWasteLog()
+      setShowWasteModal(false)
+      setWasteForm({ chemical_id: '', quantity: '', unit: 'g', reason: '', notes: '' })
+      showMessage('success', 'Waste/disposal entry recorded')
+    } catch (e) {
+      const entry = {
+        id: `waste-${Date.now()}`,
+        at: new Date().toISOString(),
+        chemical_id: chem.id,
+        chemical_name: chem.name,
+        quantity: qty,
+        unit: wasteForm.unit || chem.unit || 'g',
+        reason: wasteForm.reason || 'disposal',
+        notes: wasteForm.notes || '',
+        user_email: session?.user?.email || '',
+        organization_id: activeOrgId || null,
+      }
+      const next = [entry, ...wasteLog].slice(0, 300)
+      setWasteLog(next)
+      saveJsonStorage(WASTE_STORAGE_KEY, next)
+      setShowWasteModal(false)
+      setWasteForm({ chemical_id: '', quantity: '', unit: 'g', reason: '', notes: '' })
+      showMessage('error', 'Saved waste locally — server call failed')
     }
-    const next = [entry, ...wasteLog].slice(0, 300)
-    setWasteLog(next)
-    saveJsonStorage(WASTE_STORAGE_KEY, next)
-    pushAudit('waste_logged', {
-      chemical_id: chem.id,
-      chemical_name: chem.name,
-      quantity: qty,
-      unit: entry.unit,
-    })
-    setShowWasteModal(false)
-    setWasteForm({ chemical_id: '', quantity: '', unit: 'g', reason: '', notes: '' })
-    showMessage('success', 'Waste/disposal entry recorded')
   }
 
   const handleInviteMember = async () => {
@@ -1955,6 +2077,18 @@ function App() {
       const res = await fetch(`${API_URL}/organizations`, {
         headers: { Authorization: `Bearer ${token}` },
       })
+      if (res.status === 401) {
+        const retryToken = await getAccessToken()
+        if (retryToken) {
+          const retry = await fetch(`${API_URL}/organizations`, {
+            headers: { Authorization: `Bearer ${retryToken}` },
+          })
+          if (!retry.ok) return
+          const data = await retry.json()
+          setOrganizations(Array.isArray(data) ? data : [])
+        }
+        return
+      }
       if (!res.ok) return
       const data = await res.json()
       setOrganizations(Array.isArray(data) ? data : [])
@@ -1967,14 +2101,24 @@ function App() {
     try {
       const token = await getAccessToken()
       if (!token) return
-      const response = await fetch(`${API_URL}/transactions`, {
+      let response = await fetch(`${API_URL}/transactions`, {
         headers: { Authorization: `Bearer ${token}` },
       })
-      if (!response.ok) throw new Error('Failed to load transactions')
+      if (response.status === 401) {
+        const retryToken = await getAccessToken()
+        if (retryToken) {
+          response = await fetch(`${API_URL}/transactions`, {
+            headers: { Authorization: `Bearer ${retryToken}` },
+          })
+        }
+      }
+      if (!response.ok) {
+        console.warn('Could not load transactions:', response.status)
+        return
+      }
       const data = await response.json()
       setTransactions(Array.isArray(data) ? data : [])
     } catch (error) {
-      // Backend may not expose transactions yet — non-fatal
       console.warn('Could not load transactions:', error.message)
     }
   }, [API_URL, getAccessToken])
@@ -2719,7 +2863,7 @@ function App() {
   const filtered = useMemo(() => {
     const query = search.toLowerCase().trim()
     let result = chemicals.filter((chemical) => {
-      const archived = Boolean(getChemMeta(chemical.id).archived)
+      const archived = Boolean(chemical.archived || getChemMeta(chemical.id).archived)
       if (!showArchived && archived) return false
       if (showArchived && !archived) return false
 
@@ -3069,9 +3213,9 @@ function App() {
                     className="header-menu-item"
                     style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
                     onClick={() => {
-                      setAuditEvents(loadJsonStorage(AUDIT_STORAGE_KEY, []))
                       setShowAuditLog(true)
                       setHeaderMenuOpen(false)
+                      fetchAuditEvents()
                     }}
                   >
                     <span>📜</span> Audit log
@@ -3096,6 +3240,7 @@ function App() {
                     onClick={() => {
                       setShowWasteModal(true)
                       setHeaderMenuOpen(false)
+                      fetchWasteLog()
                     }}
                   >
                     <span>🗑️</span> Log waste / disposal
@@ -4989,7 +5134,7 @@ function App() {
               <button className="icon-btn" onClick={() => setShowAuditLog(false)}>✕</button>
             </div>
             <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: 12 }}>
-              Client-side compliance trail for this browser. Pair with server audit when available.
+              Organization-wide audit trail (server). Falls back to this browser if the API is unavailable.
             </p>
             <div style={{ maxHeight: 420, overflow: 'auto', display: 'grid', gap: 8 }}>
               {auditEvents.length === 0 ? (
@@ -5054,7 +5199,7 @@ function App() {
                           <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                             {!c.sds_filename
                               ? 'Missing SDS file'
-                              : `Last reviewed: ${meta.sds_reviewed_at || 'never'}`}
+                              : `Last reviewed: ${c.sds_reviewed_at || meta.sds_reviewed_at || 'never'}`}
                           </div>
                         </div>
                         <div style={{ display: 'flex', gap: 6 }}>
