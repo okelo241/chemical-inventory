@@ -1592,6 +1592,10 @@ function App() {
       const response = await fetch(chemicalsUrl, {
         headers: { Authorization: `Bearer ${token}` },
       })
+      if (response.status === 401) {
+        console.warn('chemicals 401 — session invalid')
+        return
+      }
       if (!response.ok) throw new Error(`HTTP error ${response.status}`)
       const data = await response.json()
       setChemicals(Array.isArray(data) ? data : [])
@@ -2070,7 +2074,7 @@ function App() {
     }
   }
 
-  const fetchOrganizations = async () => {
+  const fetchOrganizations = useCallback(async () => {
     try {
       const token = await getAccessToken()
       if (!token) return
@@ -2078,39 +2082,29 @@ function App() {
         headers: { Authorization: `Bearer ${token}` },
       })
       if (res.status === 401) {
-        const retryToken = await getAccessToken()
-        if (retryToken) {
-          const retry = await fetch(`${API_URL}/organizations`, {
-            headers: { Authorization: `Bearer ${retryToken}` },
-          })
-          if (!retry.ok) return
-          const data = await retry.json()
-          setOrganizations(Array.isArray(data) ? data : [])
-        }
+        console.warn('organizations 401 — session invalid')
         return
       }
       if (!res.ok) return
       const data = await res.json()
       setOrganizations(Array.isArray(data) ? data : [])
+      return Array.isArray(data) ? data : []
     } catch (err) {
       console.warn('Could not load organizations', err)
+      return []
     }
-  }
+  }, [API_URL, getAccessToken])
 
   const fetchTransactions = useCallback(async () => {
     try {
       const token = await getAccessToken()
       if (!token) return
-      let response = await fetch(`${API_URL}/transactions`, {
+      const response = await fetch(`${API_URL}/transactions`, {
         headers: { Authorization: `Bearer ${token}` },
       })
       if (response.status === 401) {
-        const retryToken = await getAccessToken()
-        if (retryToken) {
-          response = await fetch(`${API_URL}/transactions`, {
-            headers: { Authorization: `Bearer ${retryToken}` },
-          })
-        }
+        console.warn('transactions 401 — session invalid')
+        return
       }
       if (!response.ok) {
         console.warn('Could not load transactions:', response.status)
@@ -2131,35 +2125,91 @@ function App() {
     }
   }, [session, fetchChemicals, fetchTransactions, fetchOrganizations]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* Apply Login Personal / Organization intent once per session */
+  /* Apply Login Personal / Organization intent once per session.
+     First Organization signup auto-creates the org (admin = first login). */
   useEffect(() => {
     if (!session) return
-    try {
-      const raw = localStorage.getItem('workspaceIntent')
-      if (raw) {
-        const intent = JSON.parse(raw)
-        localStorage.removeItem('workspaceIntent')
-        if (intent?.type === 'organization') {
-          setAccountMode('organization')
-          localStorage.setItem('accountMode', 'organization')
-          if (intent.organizationName) {
-            setNewOrgName(intent.organizationName)
-            setShowCreateOrg(true)
+
+    ;(async () => {
+      try {
+        let intent = null
+        try {
+          const raw = localStorage.getItem('workspaceIntent')
+          if (raw) intent = JSON.parse(raw)
+        } catch {
+          intent = null
+        }
+
+        const meta = session.user?.user_metadata || {}
+        const type =
+          intent?.type ||
+          meta.account_type ||
+          accountMode ||
+          'personal'
+        const orgName = (
+          intent?.organizationName ||
+          meta.pending_org_name ||
+          ''
+        ).trim()
+
+        if (intent) {
+          try {
+            localStorage.removeItem('workspaceIntent')
+          } catch {
+            // ignore
           }
-        } else {
+        }
+
+        if (type !== 'organization') {
           setAccountMode('personal')
           localStorage.setItem('accountMode', 'personal')
           switchWorkspace({ mode: 'personal', organization_id: null })
+          return
         }
-        return
+
+        setAccountMode('organization')
+        localStorage.setItem('accountMode', 'organization')
+
+        const token = await getAccessToken()
+        if (!token) return
+
+        const orgs = (await fetchOrganizations()) || []
+        if (Array.isArray(orgs) && orgs.length > 0) {
+          switchToOrganization(orgs[0])
+          return
+        }
+
+        if (!orgName || orgName.length < 2) {
+          setNewOrgName(orgName || '')
+          setShowCreateOrg(true)
+          return
+        }
+
+        const createRes = await fetch(`${API_URL}/organizations`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ name: orgName }),
+        })
+
+        if (!createRes.ok) {
+          setNewOrgName(orgName)
+          setShowCreateOrg(true)
+          showMessage('error', 'Could not create organization automatically')
+          return
+        }
+
+        const org = await createRes.json()
+        setOrganizations([org])
+        switchToOrganization(org)
+        setShowCreateOrg(false)
+        showMessage('success', `Organization “${org.name}” is ready`)
+      } catch (err) {
+        console.warn('Org setup failed', err)
       }
-      // No fresh intent — keep saved accountMode and enforce workspace
-      if (accountMode === 'personal') {
-        switchWorkspace({ mode: 'personal', organization_id: null })
-      }
-    } catch {
-      // ignore
-    }
+    })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session])
 
