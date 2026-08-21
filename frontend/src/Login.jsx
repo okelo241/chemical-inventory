@@ -7,8 +7,9 @@ import './App.css'
    Ultra-Modern Login Component – Chemical Inventory
    Features:
    - Personal / Organization workspace intent selector
+   - Organization name on org signup AND org login
+   - Invite link support (?token=...) forces organization join mode
    - Full Name + Email + Password + Confirm Password
-   - Organization name (org signup only)
    - 6-digit Email Confirmation Code (OTP) via Supabase Auth
    - Forgot Password / Reset Password flow
    - Advanced validation & accessibility
@@ -27,6 +28,9 @@ function Login({ onLogin }) {
   // Workspace intent (not a separate auth system)
   // 'personal' | 'organization'
   const [accountType, setAccountType] = useState('personal')
+
+  // Invite token from URL (organization join link)
+  const [inviteToken, setInviteToken] = useState('')
 
   // ============================================================
   // FORM FIELDS
@@ -55,7 +59,7 @@ function Login({ onLogin }) {
   const [resendCooldown, setResendCooldown] = useState(0)
 
   // ============================================================
-  // FOCUS STATES (for active field styling)
+  // FOCUS STATES
   // ============================================================
   const [fullNameFocused, setFullNameFocused] = useState(false)
   const [orgNameFocused, setOrgNameFocused] = useState(false)
@@ -90,11 +94,33 @@ function Login({ onLogin }) {
     return () => clearTimeout(timer)
   }, [])
 
+  // Detect invite link: ?token=...
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search)
+      const token = (params.get('token') || '').trim()
+      if (token) {
+        setInviteToken(token)
+        setAccountType('organization')
+        setMessage(
+          'You have been invited to an organization. Sign in or create an account to join.'
+        )
+        try {
+          localStorage.setItem('pendingInviteToken', token)
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
   useEffect(() => {
     setError(null)
-    setMessage(null)
+    if (!inviteToken) setMessage(null)
     setFormTouched(false)
-  }, [mode])
+  }, [mode, inviteToken])
 
   useEffect(() => {
     if (resendCooldown <= 0) return
@@ -131,11 +157,15 @@ function Login({ onLogin }) {
     const intent = {
       type, // 'personal' | 'organization'
       organizationName: organizationName || '',
+      inviteToken: inviteToken || '',
       at: Date.now(),
     }
     try {
       localStorage.setItem('workspaceIntent', JSON.stringify(intent))
       localStorage.setItem('accountMode', type === 'organization' ? 'organization' : 'personal')
+      if (inviteToken) {
+        localStorage.setItem('pendingInviteToken', inviteToken)
+      }
     } catch {
       // ignore storage errors
     }
@@ -147,6 +177,7 @@ function Login({ onLogin }) {
   const canSubmitLogin =
     isEmailValid(email) &&
     isPasswordValid(password) &&
+    (accountType === 'personal' || inviteToken || isNameValid(orgName)) &&
     !loading
 
   const canSubmitSignup =
@@ -157,19 +188,10 @@ function Login({ onLogin }) {
     (accountType === 'personal' || isNameValid(orgName)) &&
     !loading
 
-  const canSubmitOtp =
-    isOtpValid &&
-    !loading
-
-  const canSubmitForgot =
-    isEmailValid(email) &&
-    !loading
-
+  const canSubmitOtp = isOtpValid && !loading
+  const canSubmitForgot = isEmailValid(email) && !loading
   const canSubmitReset =
-    isOtpValid &&
-    isPasswordValid(newPassword) &&
-    doNewPasswordsMatch &&
-    !loading
+    isOtpValid && isPasswordValid(newPassword) && doNewPasswordsMatch && !loading
 
   // ============================================================
   // FIELD ERROR FLAGS
@@ -179,45 +201,35 @@ function Login({ onLogin }) {
 
   const orgNameHasError =
     formTouched &&
-    mode === 'signup' &&
+    (mode === 'signup' || mode === 'login') &&
     accountType === 'organization' &&
+    !inviteToken &&
     orgName.length > 0 &&
     !isNameValid(orgName)
 
-  const emailHasError =
-    formTouched && email.length > 0 && !isEmailValid(email)
-
-  const passwordHasError =
-    formTouched && password.length > 0 && !isPasswordValid(password)
-
+  const emailHasError = formTouched && email.length > 0 && !isEmailValid(email)
+  const passwordHasError = formTouched && password.length > 0 && !isPasswordValid(password)
   const confirmHasError =
     formTouched && mode === 'signup' && confirmPassword.length > 0 && !doPasswordsMatch
-
   const otpHasError =
     formTouched && (mode === 'confirm' || mode === 'reset') && otpCode.length > 0 && !isOtpValid
-
   const newPasswordHasError =
     formTouched && mode === 'reset' && newPassword.length > 0 && !isPasswordValid(newPassword)
-
   const confirmNewHasError =
     formTouched && mode === 'reset' && confirmNewPassword.length > 0 && !doNewPasswordsMatch
 
   // ============================================================
   // AUTH HANDLERS
-  // OTP emails are sent by Supabase Auth (not Render).
-  // Personal and Organization use the same signUp + verifyOtp path.
   // ============================================================
   const handleLogin = async () => {
-    persistWorkspaceIntent(accountType)
+    persistWorkspaceIntent(accountType, orgName.trim())
 
     const { data, error: authError } = await supabase.auth.signInWithPassword({
       email: email.trim().toLowerCase(),
       password,
     })
 
-    if (authError) {
-      throw authError
-    }
+    if (authError) throw authError
 
     if (data?.session) {
       onLogin(data.session)
@@ -232,8 +244,6 @@ function Login({ onLogin }) {
 
     persistWorkspaceIntent(accountType, cleanOrg)
 
-    // Same Supabase signup for personal and organization.
-    // Organization only adds user_metadata (does not change email OTP delivery).
     const { data, error: authError } = await supabase.auth.signUp({
       email: cleanEmail,
       password,
@@ -241,20 +251,14 @@ function Login({ onLogin }) {
         data: {
           full_name: fullName.trim(),
           account_type: accountType,
-          pending_org_name:
-            accountType === 'organization' ? cleanOrg : null,
+          pending_org_name: accountType === 'organization' ? cleanOrg : null,
         },
-        // Ensure email redirect stays on this app if magic-link fallback is used
         emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
       },
     })
 
-    if (authError) {
-      throw authError
-    }
+    if (authError) throw authError
 
-    // Supabase returns user with empty identities when email is already registered
-    // (and often does NOT send a new confirmation email).
     const identities = data?.user?.identities
     if (data?.user && Array.isArray(identities) && identities.length === 0) {
       throw new Error(
@@ -262,30 +266,26 @@ function Login({ onLogin }) {
       )
     }
 
-    // If email confirmation is disabled in Supabase, session is returned immediately
     if (data?.session) {
       persistWorkspaceIntent(accountType, cleanOrg)
       onLogin(data.session)
       return
     }
 
-    // Email confirmation required — move to OTP step
-    // Proactively request a confirmation email again (helps when first mail is delayed)
     try {
       await supabase.auth.resend({
         type: 'signup',
         email: cleanEmail,
       })
     } catch (resendErr) {
-      // Non-fatal: first signUp may already have queued the email
       console.warn('Signup resend hint:', resendErr?.message || resendErr)
     }
 
     setMode('confirm')
     setMessage(
       accountType === 'organization'
-        ? 'A 6-digit confirmation code has been sent to your email (from Supabase). After you verify, you can finish setting up your organization workspace. Check spam if you do not see it within a minute.'
-        : 'A 6-digit confirmation code has been sent to your email (from Supabase). Please enter it below to activate your personal account. Check spam if you do not see it within a minute.'
+        ? 'A 6-digit confirmation code has been sent to your email. After you verify, you can finish setting up your organization workspace. Check spam if needed.'
+        : 'A 6-digit confirmation code has been sent to your email. Please enter it below to activate your personal account. Check spam if needed.'
     )
     setPassword('')
     setConfirmPassword('')
@@ -302,9 +302,7 @@ function Login({ onLogin }) {
       type: 'signup',
     })
 
-    if (otpError) {
-      throw otpError
-    }
+    if (otpError) throw otpError
 
     if (data?.session) {
       persistWorkspaceIntent(accountType, orgName.trim())
@@ -323,9 +321,7 @@ function Login({ onLogin }) {
       redirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
     })
 
-    if (resetError) {
-      throw resetError
-    }
+    if (resetError) throw resetError
 
     setMode('reset')
     setMessage(
@@ -343,17 +339,13 @@ function Login({ onLogin }) {
       type: 'recovery',
     })
 
-    if (otpError) {
-      throw otpError
-    }
+    if (otpError) throw otpError
 
     const { error: updateError } = await supabase.auth.updateUser({
       password: newPassword,
     })
 
-    if (updateError) {
-      throw updateError
-    }
+    if (updateError) throw updateError
 
     setMessage('Password updated successfully! You can now sign in with your new password.')
     setMode('login')
@@ -369,7 +361,7 @@ function Login({ onLogin }) {
 
     setLoading(true)
     setError(null)
-    setMessage(null)
+    if (!inviteToken) setMessage(null)
 
     const cleanEmail = email.trim().toLowerCase()
 
@@ -379,19 +371,11 @@ function Login({ onLogin }) {
           type: 'signup',
           email: cleanEmail,
         })
-
-        if (resendError) {
-          throw resendError
-        }
-
+        if (resendError) throw resendError
         setMessage('A new confirmation code has been sent to your email. Check inbox and spam.')
       } else if (mode === 'reset' || mode === 'forgot') {
         const { error: resendError } = await supabase.auth.resetPasswordForEmail(cleanEmail)
-
-        if (resendError) {
-          throw resendError
-        }
-
+        if (resendError) throw resendError
         setMessage('A new recovery code has been sent to your email. Check inbox and spam.')
       }
 
@@ -411,11 +395,15 @@ function Login({ onLogin }) {
     e.preventDefault()
     setFormTouched(true)
     setError(null)
-    setMessage(null)
+    if (!inviteToken) setMessage(null)
 
     if (mode === 'login') {
       if (!canSubmitLogin) {
-        setError('Please enter a valid email and a password of at least 6 characters.')
+        if (accountType === 'organization' && !inviteToken && !isNameValid(orgName)) {
+          setError('Please enter your organization name.')
+        } else {
+          setError('Please enter a valid email and a password of at least 6 characters.')
+        }
         return
       }
     } else if (mode === 'signup') {
@@ -463,22 +451,14 @@ function Login({ onLogin }) {
     setLoading(true)
 
     try {
-      if (mode === 'login') {
-        await handleLogin()
-      } else if (mode === 'signup') {
-        await handleSignUp()
-      } else if (mode === 'confirm') {
-        await handleVerifyOtp()
-      } else if (mode === 'forgot') {
-        await handleForgotPassword()
-      } else if (mode === 'reset') {
-        await handleResetPassword()
-      }
+      if (mode === 'login') await handleLogin()
+      else if (mode === 'signup') await handleSignUp()
+      else if (mode === 'confirm') await handleVerifyOtp()
+      else if (mode === 'forgot') await handleForgotPassword()
+      else if (mode === 'reset') await handleResetPassword()
     } catch (err) {
       let errorMessage =
-        err?.message ||
-        err?.error_description ||
-        'Something went wrong. Please try again.'
+        err?.message || err?.error_description || 'Something went wrong. Please try again.'
 
       const lower = errorMessage.toLowerCase()
       if (lower.includes('email not confirmed')) {
@@ -516,7 +496,7 @@ function Login({ onLogin }) {
     setNewPassword('')
     setConfirmNewPassword('')
     setError(null)
-    setMessage(null)
+    if (!inviteToken) setMessage(null)
     setFormTouched(false)
   }
 
@@ -526,7 +506,7 @@ function Login({ onLogin }) {
     setNewPassword('')
     setConfirmNewPassword('')
     setError(null)
-    setMessage(null)
+    if (!inviteToken) setMessage(null)
     setFormTouched(false)
   }
 
@@ -559,10 +539,7 @@ function Login({ onLogin }) {
       <div className="auth-corner auth-corner--bl" aria-hidden="true" />
       <div className="auth-corner auth-corner--br" aria-hidden="true" />
 
-      <div
-        className={`auth-card ${cardVisible ? 'auth-card--visible' : ''}`}
-        role="main"
-      >
+      <div className={`auth-card ${cardVisible ? 'auth-card--visible' : ''}`} role="main">
         <header className="auth-header">
           <div className="auth-logo-wrap">
             <div className="auth-logo">
@@ -573,11 +550,16 @@ function Login({ onLogin }) {
 
           <h1 className="auth-title">Chemical Inventory</h1>
           <p className="auth-subtitle">
-            {mode === 'login' &&
+            {inviteToken && (mode === 'login' || mode === 'signup')
+              ? 'Organization invitation — sign in or create an account to join'
+              : null}
+            {!inviteToken &&
+              mode === 'login' &&
               (accountType === 'organization'
                 ? 'Sign in to your organization workspace'
                 : 'Sign in to your personal laboratory inventory')}
-            {mode === 'signup' &&
+            {!inviteToken &&
+              mode === 'signup' &&
               (accountType === 'organization'
                 ? 'Create an account and set up your organization'
                 : 'Create a personal account to get started')}
@@ -587,7 +569,7 @@ function Login({ onLogin }) {
           </p>
         </header>
 
-        {(mode === 'login' || mode === 'signup') && (
+        {(mode === 'login' || mode === 'signup') && !inviteToken && (
           <div
             className="auth-account-type"
             role="group"
@@ -615,12 +597,9 @@ function Login({ onLogin }) {
                 fontWeight: 600,
                 fontSize: '0.875rem',
                 lineHeight: 1.3,
-                background:
-                  accountType === 'personal' ? 'var(--panel, #ffffff)' : 'transparent',
+                background: accountType === 'personal' ? 'var(--panel, #ffffff)' : 'transparent',
                 boxShadow:
-                  accountType === 'personal'
-                    ? '0 1px 4px rgba(15, 23, 42, 0.08)'
-                    : 'none',
+                  accountType === 'personal' ? '0 1px 4px rgba(15, 23, 42, 0.08)' : 'none',
                 color: 'var(--text, #0f172a)',
               }}
             >
@@ -641,9 +620,7 @@ function Login({ onLogin }) {
                 background:
                   accountType === 'organization' ? 'var(--panel, #ffffff)' : 'transparent',
                 boxShadow:
-                  accountType === 'organization'
-                    ? '0 1px 4px rgba(15, 23, 42, 0.08)'
-                    : 'none',
+                  accountType === 'organization' ? '0 1px 4px rgba(15, 23, 42, 0.08)' : 'none',
                 color: 'var(--text, #0f172a)',
               }}
             >
@@ -652,62 +629,18 @@ function Login({ onLogin }) {
           </div>
         )}
 
-        {(mode === 'login' || mode === 'signup') && (
-          <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === 'login'}
-              className={`auth-tab ${mode === 'login' ? 'auth-tab--active' : ''}`}
-              onClick={switchToLogin}
-            >
-              Sign In
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === 'signup'}
-              className={`auth-tab ${mode === 'signup' ? 'auth-tab--active' : ''}`}
-              onClick={switchToSignup}
-            >
-              Create Account
-            </button>
-            <div
-              className="auth-tab-indicator"
-              style={{
-                transform: mode === 'login' ? 'translateX(0%)' : 'translateX(100%)',
-              }}
-              aria-hidden="true"
-            />
-          </div>
-        )}
-
-        <form
-          ref={formRef}
-          className="auth-form"
-          onSubmit={handleSubmit}
-          noValidate
-        >
+        <form ref={formRef} className="auth-form" onSubmit={handleSubmit} noValidate>
           {(mode === 'confirm' || mode === 'reset') && (
             <>
-              <div className="auth-confirm-info">
-                <p className="auth-confirm-label">
-                  {mode === 'confirm'
-                    ? 'We sent a 6-digit code to'
-                    : 'We sent a recovery code to'}
-                </p>
-                <p className="auth-confirm-email">{email.trim().toLowerCase()}</p>
-              </div>
-
               <div
                 className={`auth-field ${
                   otpFocused || otpCode ? 'auth-field--active' : ''
                 } ${otpHasError ? 'auth-field--error' : ''}`}
               >
                 <label htmlFor="auth-otp" className="auth-label">
-                  {mode === 'confirm' ? 'Confirmation Code' : 'Recovery Code'}
+                  6-digit code
                 </label>
-                <div className="auth-input-wrap auth-input-wrap--otp">
+                <div className="auth-input-wrap">
                   <input
                     ref={otpRef}
                     id="auth-otp"
@@ -716,24 +649,18 @@ function Login({ onLogin }) {
                     pattern="[0-9]*"
                     maxLength={6}
                     value={otpCode}
-                    onChange={(e) => {
-                      const value = e.target.value.replace(/\D/g, '').slice(0, 6)
-                      setOtpCode(value)
-                    }}
+                    onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                     onFocus={() => setOtpFocused(true)}
                     onBlur={() => setOtpFocused(false)}
-                    placeholder="000000"
-                    className="otp-input"
+                    required
                     disabled={loading}
                     autoComplete="one-time-code"
-                    aria-invalid={otpHasError}
-                    aria-describedby={otpHasError ? 'otp-error' : undefined}
                     autoFocus
                   />
                 </div>
                 {otpHasError && (
-                  <p id="otp-error" className="auth-field-hint auth-field-hint--error">
-                    Please enter a valid 6-digit code
+                  <p className="auth-field-hint auth-field-hint--error">
+                    Please enter the 6-digit code
                   </p>
                 )}
               </div>
@@ -749,12 +676,6 @@ function Login({ onLogin }) {
                       New Password
                     </label>
                     <div className="auth-input-wrap">
-                      <span className="auth-input-icon" aria-hidden="true">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="5" y="11" width="14" height="10" rx="2" />
-                          <path d="M8 11V7a4 4 0 0 1 8 0v4" />
-                        </svg>
-                      </span>
                       <input
                         ref={newPasswordRef}
                         id="auth-new-password"
@@ -763,38 +684,20 @@ function Login({ onLogin }) {
                         onChange={(e) => setNewPassword(e.target.value)}
                         onFocus={() => setNewPasswordFocused(true)}
                         onBlur={() => setNewPasswordFocused(false)}
-                        placeholder=" "
                         required
                         minLength={6}
                         disabled={loading}
                         autoComplete="new-password"
-                        aria-invalid={newPasswordHasError}
                       />
                       <button
                         type="button"
                         className="auth-password-toggle"
                         onClick={() => setShowNewPassword((prev) => !prev)}
                         tabIndex={-1}
-                        aria-label={showNewPassword ? 'Hide password' : 'Show password'}
                       >
-                        {showNewPassword ? (
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                            <line x1="1" y1="1" x2="23" y2="23" />
-                          </svg>
-                        ) : (
-                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                            <circle cx="12" cy="12" r="3" />
-                          </svg>
-                        )}
+                        {showNewPassword ? 'Hide' : 'Show'}
                       </button>
                     </div>
-                    {newPasswordHasError && (
-                      <p className="auth-field-hint auth-field-hint--error">
-                        Password must be at least 6 characters
-                      </p>
-                    )}
                   </div>
 
                   <div
@@ -806,12 +709,6 @@ function Login({ onLogin }) {
                       Confirm New Password
                     </label>
                     <div className="auth-input-wrap">
-                      <span className="auth-input-icon" aria-hidden="true">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="5" y="11" width="14" height="10" rx="2" />
-                          <path d="M8 11V7a4 4 0 0 1 8 0v4" />
-                        </svg>
-                      </span>
                       <input
                         ref={confirmNewRef}
                         id="auth-confirm-new"
@@ -820,19 +717,12 @@ function Login({ onLogin }) {
                         onChange={(e) => setConfirmNewPassword(e.target.value)}
                         onFocus={() => setConfirmNewFocused(true)}
                         onBlur={() => setConfirmNewFocused(false)}
-                        placeholder=" "
                         required
                         minLength={6}
                         disabled={loading}
                         autoComplete="new-password"
-                        aria-invalid={confirmNewHasError}
                       />
                     </div>
-                    {confirmNewHasError && (
-                      <p className="auth-field-hint auth-field-hint--error">
-                        Passwords do not match
-                      </p>
-                    )}
                   </div>
                 </>
               )}
@@ -864,12 +754,6 @@ function Login({ onLogin }) {
                 Email address
               </label>
               <div className="auth-input-wrap">
-                <span className="auth-input-icon" aria-hidden="true">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="5" width="18" height="14" rx="2" />
-                    <path d="M3 7l9 6 9-6" />
-                  </svg>
-                </span>
                 <input
                   ref={emailRef}
                   id="auth-email-forgot"
@@ -878,19 +762,12 @@ function Login({ onLogin }) {
                   onChange={(e) => setEmail(e.target.value)}
                   onFocus={() => setEmailFocused(true)}
                   onBlur={() => setEmailFocused(false)}
-                  placeholder=" "
                   required
                   disabled={loading}
                   autoComplete="email"
-                  aria-invalid={emailHasError}
                   autoFocus
                 />
               </div>
-              {emailHasError && (
-                <p className="auth-field-hint auth-field-hint--error">
-                  Please enter a valid email address
-                </p>
-              )}
             </div>
           )}
 
@@ -906,12 +783,6 @@ function Login({ onLogin }) {
                     Full Name
                   </label>
                   <div className="auth-input-wrap">
-                    <span className="auth-input-icon" aria-hidden="true">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                        <circle cx="12" cy="7" r="4" />
-                      </svg>
-                    </span>
                     <input
                       ref={fullNameRef}
                       id="auth-fullName"
@@ -920,68 +791,59 @@ function Login({ onLogin }) {
                       onChange={(e) => setFullName(e.target.value)}
                       onFocus={() => setFullNameFocused(true)}
                       onBlur={() => setFullNameFocused(false)}
-                      placeholder=" "
                       required
                       minLength={2}
                       disabled={loading}
                       autoComplete="name"
-                      aria-invalid={nameHasError}
-                      aria-describedby={nameHasError ? 'name-error' : undefined}
                     />
                   </div>
                   {nameHasError && (
-                    <p id="name-error" className="auth-field-hint auth-field-hint--error">
+                    <p className="auth-field-hint auth-field-hint--error">
                       Please enter your full name (minimum 2 characters)
                     </p>
                   )}
                 </div>
               )}
 
-              {mode === 'signup' && accountType === 'organization' && (
-                <div
-                  className={`auth-field ${
-                    orgNameFocused || orgName ? 'auth-field--active' : ''
-                  } ${orgNameHasError ? 'auth-field--error' : ''}`}
-                >
-                  <label htmlFor="auth-orgName" className="auth-label">
-                    Organization name
-                  </label>
-                  <div className="auth-input-wrap">
-                    <span className="auth-input-icon" aria-hidden="true">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M3 21h18" />
-                        <path d="M5 21V7l7-4 7 4v14" />
-                        <path d="M9 21v-6h6v6" />
-                      </svg>
-                    </span>
-                    <input
-                      ref={orgNameRef}
-                      id="auth-orgName"
-                      type="text"
-                      value={orgName}
-                      onChange={(e) => setOrgName(e.target.value)}
-                      onFocus={() => setOrgNameFocused(true)}
-                      onBlur={() => setOrgNameFocused(false)}
-                      placeholder=" "
-                      required
-                      minLength={2}
-                      disabled={loading}
-                      autoComplete="organization"
-                      aria-invalid={orgNameHasError}
-                      aria-describedby={orgNameHasError ? 'org-error' : 'org-hint'}
-                    />
+              {/* Organization name on signup, and on login (unless invite token) */}
+              {accountType === 'organization' &&
+                (mode === 'signup' || (mode === 'login' && !inviteToken)) && (
+                  <div
+                    className={`auth-field ${
+                      orgNameFocused || orgName ? 'auth-field--active' : ''
+                    } ${orgNameHasError ? 'auth-field--error' : ''}`}
+                  >
+                    <label htmlFor="auth-orgName" className="auth-label">
+                      Organization name
+                    </label>
+                    <div className="auth-input-wrap">
+                      <input
+                        ref={orgNameRef}
+                        id="auth-orgName"
+                        type="text"
+                        value={orgName}
+                        onChange={(e) => setOrgName(e.target.value)}
+                        onFocus={() => setOrgNameFocused(true)}
+                        onBlur={() => setOrgNameFocused(false)}
+                        required
+                        minLength={2}
+                        disabled={loading}
+                        autoComplete="organization"
+                      />
+                    </div>
+                    {orgNameHasError ? (
+                      <p className="auth-field-hint auth-field-hint--error">
+                        Please enter an organization name (minimum 2 characters)
+                      </p>
+                    ) : (
+                      <p className="auth-field-hint" style={{ marginTop: 6, opacity: 0.75 }}>
+                        {mode === 'login'
+                          ? 'Enter the organization name you belong to.'
+                          : 'You will be the owner. Invite colleagues after you sign in.'}
+                      </p>
+                    )}
                   </div>
-                  {orgNameHasError ? (
-                    <p id="org-error" className="auth-field-hint auth-field-hint--error">
-                      Please enter an organization name (minimum 2 characters)
-                    </p>
-                  ) : (
-                    <p id="org-hint" className="auth-field-hint" style={{ marginTop: 6, opacity: 0.75 }}>
-                      You will be the owner. Invite colleagues after you sign in.
-                    </p>
-                  )}
-                </div>
-              )}
+                )}
 
               <div
                 className={`auth-field ${
@@ -992,12 +854,6 @@ function Login({ onLogin }) {
                   Email address
                 </label>
                 <div className="auth-input-wrap">
-                  <span className="auth-input-icon" aria-hidden="true">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="3" y="5" width="18" height="14" rx="2" />
-                      <path d="M3 7l9 6 9-6" />
-                    </svg>
-                  </span>
                   <input
                     ref={emailRef}
                     id="auth-email"
@@ -1006,16 +862,13 @@ function Login({ onLogin }) {
                     onChange={(e) => setEmail(e.target.value)}
                     onFocus={() => setEmailFocused(true)}
                     onBlur={() => setEmailFocused(false)}
-                    placeholder=" "
                     required
                     disabled={loading}
                     autoComplete="email"
-                    aria-invalid={emailHasError}
-                    aria-describedby={emailHasError ? 'email-error' : undefined}
                   />
                 </div>
                 {emailHasError && (
-                  <p id="email-error" className="auth-field-hint auth-field-hint--error">
+                  <p className="auth-field-hint auth-field-hint--error">
                     Please enter a valid email address
                   </p>
                 )}
@@ -1030,12 +883,6 @@ function Login({ onLogin }) {
                   Password
                 </label>
                 <div className="auth-input-wrap">
-                  <span className="auth-input-icon" aria-hidden="true">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="5" y="11" width="14" height="10" rx="2" />
-                      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
-                    </svg>
-                  </span>
                   <input
                     ref={passwordRef}
                     id="auth-password"
@@ -1044,36 +891,22 @@ function Login({ onLogin }) {
                     onChange={(e) => setPassword(e.target.value)}
                     onFocus={() => setPasswordFocused(true)}
                     onBlur={() => setPasswordFocused(false)}
-                    placeholder=" "
                     required
                     minLength={6}
                     disabled={loading}
                     autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                    aria-invalid={passwordHasError}
-                    aria-describedby={passwordHasError ? 'password-error' : undefined}
                   />
                   <button
                     type="button"
                     className="auth-password-toggle"
                     onClick={() => setShowPassword((prev) => !prev)}
                     tabIndex={-1}
-                    aria-label={showPassword ? 'Hide password' : 'Show password'}
                   >
-                    {showPassword ? (
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                        <line x1="1" y1="1" x2="23" y2="23" />
-                      </svg>
-                    ) : (
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                        <circle cx="12" cy="12" r="3" />
-                      </svg>
-                    )}
+                    {showPassword ? 'Hide' : 'Show'}
                   </button>
                 </div>
                 {passwordHasError && (
-                  <p id="password-error" className="auth-field-hint auth-field-hint--error">
+                  <p className="auth-field-hint auth-field-hint--error">
                     Password must be at least 6 characters
                   </p>
                 )}
@@ -1081,11 +914,7 @@ function Login({ onLogin }) {
 
               {mode === 'login' && (
                 <div className="auth-forgot-row">
-                  <button
-                    type="button"
-                    className="auth-forgot-link"
-                    onClick={switchToForgot}
-                  >
+                  <button type="button" className="auth-forgot-link" onClick={switchToForgot}>
                     Forgot password?
                   </button>
                 </div>
@@ -1101,12 +930,6 @@ function Login({ onLogin }) {
                     Confirm Password
                   </label>
                   <div className="auth-input-wrap">
-                    <span className="auth-input-icon" aria-hidden="true">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                        <rect x="5" y="11" width="14" height="10" rx="2" />
-                        <path d="M8 11V7a4 4 0 0 1 8 0v4" />
-                      </svg>
-                    </span>
                     <input
                       ref={confirmRef}
                       id="auth-confirm"
@@ -1115,36 +938,22 @@ function Login({ onLogin }) {
                       onChange={(e) => setConfirmPassword(e.target.value)}
                       onFocus={() => setConfirmFocused(true)}
                       onBlur={() => setConfirmFocused(false)}
-                      placeholder=" "
                       required
                       minLength={6}
                       disabled={loading}
                       autoComplete="new-password"
-                      aria-invalid={confirmHasError}
-                      aria-describedby={confirmHasError ? 'confirm-error' : undefined}
                     />
                     <button
                       type="button"
                       className="auth-password-toggle"
                       onClick={() => setShowConfirmPassword((prev) => !prev)}
                       tabIndex={-1}
-                      aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
                     >
-                      {showConfirmPassword ? (
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
-                          <line x1="1" y1="1" x2="23" y2="23" />
-                        </svg>
-                      ) : (
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                          <circle cx="12" cy="12" r="3" />
-                        </svg>
-                      )}
+                      {showConfirmPassword ? 'Hide' : 'Show'}
                     </button>
                   </div>
                   {confirmHasError && (
-                    <p id="confirm-error" className="auth-field-hint auth-field-hint--error">
+                    <p className="auth-field-hint auth-field-hint--error">
                       Passwords do not match
                     </p>
                   )}
@@ -1155,21 +964,12 @@ function Login({ onLogin }) {
 
           {error && (
             <div className="auth-alert auth-alert--error" role="alert">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                <circle cx="12" cy="12" r="10" />
-                <line x1="12" y1="8" x2="12" y2="12" />
-                <line x1="12" y1="16" x2="12.01" y2="16" />
-              </svg>
               <span>{error}</span>
             </div>
           )}
 
           {message && (
             <div className="auth-alert auth-alert--success" role="status">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                <polyline points="22 4 12 14.01 9 11.01" />
-              </svg>
               <span>{message}</span>
             </div>
           )}
@@ -1187,15 +987,14 @@ function Login({ onLogin }) {
             }
           >
             {loading ? (
-              <>
-                <span className="auth-spinner" aria-hidden="true" />
-                <span>Please wait…</span>
-              </>
+              <span>Please wait…</span>
             ) : mode === 'login' ? (
-              <span>Sign In</span>
+              <span>{inviteToken ? 'Join organization' : 'Sign In'}</span>
             ) : mode === 'signup' ? (
               <span>
-                {accountType === 'organization'
+                {inviteToken
+                  ? 'Create account & join'
+                  : accountType === 'organization'
                   ? 'Create organization account'
                   : 'Create personal account'}
               </span>
@@ -1246,43 +1045,29 @@ function Login({ onLogin }) {
             </p>
           )}
 
-          {mode === 'signup' && accountType === 'personal' && (
+          {mode === 'signup' && accountType === 'personal' && !inviteToken && (
             <p className="auth-footer-note">
-              After creating an account you will receive a 6-digit confirmation code by email
-              (sent by Supabase Auth). You must enter that code before you can sign in.
+              After creating an account you will receive a 6-digit confirmation code by email.
             </p>
           )}
 
-          {mode === 'signup' && accountType === 'organization' && (
+          {mode === 'signup' && accountType === 'organization' && !inviteToken && (
             <p className="auth-footer-note">
-              Organization signup uses the same email confirmation as personal accounts.
               After the 6-digit code is verified, you can create your organization and invite members.
             </p>
           )}
 
-          {mode === 'login' && (
+          {inviteToken && (mode === 'login' || mode === 'signup') && (
+            <p className="auth-footer-note">
+              This invite link will attach your account to the organization after you sign in.
+            </p>
+          )}
+
+          {mode === 'login' && !inviteToken && (
             <p className="auth-footer-note">
               {accountType === 'organization'
-                ? 'Organization members share inventory. Personal and Organization are workspace modes of the same login.'
+                ? 'Enter organization name + email/password to open that workspace.'
                 : 'Secure access for laboratory chemical inventory management'}
-            </p>
-          )}
-
-          {mode === 'confirm' && (
-            <p className="auth-footer-note">
-              The code is sent by Supabase (not Render). Check spam/junk. You can resend after the cooldown.
-            </p>
-          )}
-
-          {mode === 'forgot' && (
-            <p className="auth-footer-note">
-              We will send a 6-digit recovery code to your email so you can set a new password.
-            </p>
-          )}
-
-          {mode === 'reset' && (
-            <p className="auth-footer-note">
-              Enter the recovery code from your email and choose a new password.
             </p>
           )}
         </footer>
