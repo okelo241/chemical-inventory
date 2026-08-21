@@ -29,6 +29,14 @@
  * - Landing page preview without logging out
  * - Personal / Organization workspace switch (individual accounts kept)
  * - Organization invites + member management
+ * - Invite copy-link for org onboarding (solid token + copy UX)
+ * - CSV import (bulk add chemicals)
+ * - SDS completeness % on dashboard / inventory stats
+ * - Hierarchical locations (Building / Room / Cabinet / Shelf)
+ * - Append-only audit log (client + optional server later)
+ * - SDS review dates + missing/outdated report
+ * - Archive vs delete, label print, duplicate CAS+location warn
+ * - Waste/disposal log, delete-account flow
  * - Header overflow menu (⋯) for secondary actions
  *
  * SAFETY NOTE:
@@ -239,6 +247,11 @@ const EMPTY_FORM = {
   quantity: '',
   unit: 'g',
   location: '',
+  // Hierarchical location parts (joined into `location` on save)
+  loc_building: '',
+  loc_room: '',
+  loc_cabinet: '',
+  loc_shelf: '',
   expiry_date: '',
   min_stock: '',
   hazard_notes: '',
@@ -248,6 +261,13 @@ const EMPTY_FORM = {
   supplier: '',
   chemical_classes: [],
   barcode: '',
+  // Phase A extras (stored in location string / meta when API lacks columns)
+  sds_reviewed_at: '',
+  sds_review_months: '12',
+  container_code: '',
+  parent_cas_key: '',
+  lab_unit: '',
+  archived: false,
 }
 
 /** Idle timeout: 30 minutes of no user activity → automatic logout */
@@ -256,8 +276,156 @@ const IDLE_TIMEOUT_MS = 30 * 60 * 1000
 /** How many days before expiry counts as “expiring soon” */
 const EXPIRY_SOON_DAYS = 30
 
+/** SDS review default interval (months) */
+const SDS_REVIEW_DEFAULT_MONTHS = 12
+
 /** Max notifications kept in memory */
 const MAX_NOTIFICATIONS = 60
+
+/** Max audit events kept client-side (append-only ring) */
+const MAX_AUDIT_EVENTS = 500
+
+const AUDIT_STORAGE_KEY = 'chem_audit_log_v1'
+const CHEM_META_STORAGE_KEY = 'chem_meta_v1'
+const WASTE_STORAGE_KEY = 'chem_waste_log_v1'
+const LAB_UNITS_STORAGE_KEY = 'chem_lab_units_v1'
+
+/* ========================================================================== */
+/* PHASE A HELPERS — locations, audit, SDS review, labels, duplicates         */
+/* ========================================================================== */
+
+const joinLocationPath = ({ loc_building, loc_room, loc_cabinet, loc_shelf, location }) => {
+  const parts = [loc_building, loc_room, loc_cabinet, loc_shelf]
+    .map((p) => (p || '').trim())
+    .filter(Boolean)
+  if (parts.length) return parts.join(' / ')
+  return (location || '').trim()
+}
+
+const splitLocationPath = (location) => {
+  const raw = (location || '').trim()
+  if (!raw) {
+    return { loc_building: '', loc_room: '', loc_cabinet: '', loc_shelf: '', location: '' }
+  }
+  const parts = raw.split(/\s*\/\s*/).map((p) => p.trim()).filter(Boolean)
+  return {
+    loc_building: parts[0] || '',
+    loc_room: parts[1] || '',
+    loc_cabinet: parts[2] || '',
+    loc_shelf: parts[3] || '',
+    location: raw,
+  }
+}
+
+const loadJsonStorage = (key, fallback) => {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return fallback
+    const parsed = JSON.parse(raw)
+    return parsed ?? fallback
+  } catch {
+    return fallback
+  }
+}
+
+const saveJsonStorage = (key, value) => {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    // quota / private mode
+  }
+}
+
+const appendAuditEvent = (event) => {
+  const list = loadJsonStorage(AUDIT_STORAGE_KEY, [])
+  const row = {
+    id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    at: new Date().toISOString(),
+    ...event,
+  }
+  list.unshift(row)
+  saveJsonStorage(AUDIT_STORAGE_KEY, list.slice(0, MAX_AUDIT_EVENTS))
+  return row
+}
+
+const getChemMeta = (chemicalId) => {
+  const all = loadJsonStorage(CHEM_META_STORAGE_KEY, {})
+  return all[String(chemicalId)] || {}
+}
+
+const setChemMeta = (chemicalId, patch) => {
+  const all = loadJsonStorage(CHEM_META_STORAGE_KEY, {})
+  const key = String(chemicalId)
+  all[key] = { ...(all[key] || {}), ...patch, updated_at: new Date().toISOString() }
+  saveJsonStorage(CHEM_META_STORAGE_KEY, all)
+  return all[key]
+}
+
+const sdsReviewDueDate = (reviewedAt, months = SDS_REVIEW_DEFAULT_MONTHS) => {
+  if (!reviewedAt) return null
+  try {
+    const d = new Date(reviewedAt)
+    if (Number.isNaN(d.getTime())) return null
+    d.setMonth(d.getMonth() + Number(months || SDS_REVIEW_DEFAULT_MONTHS))
+    return d.toISOString().slice(0, 10)
+  } catch {
+    return null
+  }
+}
+
+const isSdsReviewOverdue = (chemical) => {
+  const meta = getChemMeta(chemical?.id)
+  const reviewed = meta.sds_reviewed_at || chemical?.sds_reviewed_at
+  if (!chemical?.sds_filename && !reviewed) return true // missing SDS counts as overdue for report
+  if (!reviewed) return Boolean(chemical?.sds_filename) // has file but never reviewed
+  const due = sdsReviewDueDate(reviewed, meta.sds_review_months || SDS_REVIEW_DEFAULT_MONTHS)
+  if (!due) return false
+  return daysUntil(due) !== null && daysUntil(due) < 0
+}
+
+const findDuplicateChemicals = (list, { cas_number, location, excludeId }) => {
+  const cas = (cas_number || '').trim().toLowerCase()
+  const loc = normalizeLocation(location)
+  if (!cas && !loc) return []
+  return (list || []).filter((c) => {
+    if (excludeId && c.id === excludeId) return false
+    if (c.archived || getChemMeta(c.id).archived) return false
+    const sameCas = cas && (c.cas_number || '').trim().toLowerCase() === cas
+    const sameLoc = loc && normalizeLocation(c.location) === loc
+    return Boolean(sameCas && sameLoc)
+  })
+}
+
+const printChemicalLabel = (chemical) => {
+  if (!chemical) return
+  const hazards = asArray(chemical.hazard_symbols).join(', ')
+  const w = window.open('', '_blank', 'noopener,noreferrer,width=420,height=560')
+  if (!w) return
+  const barcode = chemical.barcode || `CHEM-${chemical.id}`
+  w.document.write(`<!DOCTYPE html><html><head><title>Label — ${chemical.name}</title>
+    <style>
+      body{font-family:system-ui,sans-serif;padding:16px;color:#0f172a}
+      .card{border:2px solid #0f172a;border-radius:12px;padding:16px;max-width:360px}
+      h1{font-size:18px;margin:0 0 8px}
+      .mono{font-family:ui-monospace,monospace;font-size:12px}
+      .row{margin:6px 0;font-size:13px}
+      .haz{margin-top:10px;padding:8px;background:#fef3c7;border-radius:8px;font-size:12px}
+      @media print{button{display:none}}
+    </style></head><body>
+    <div class="card">
+      <h1>${(chemical.name || '').replace(/</g, '&lt;')}</h1>
+      <div class="row mono">CAS: ${chemical.cas_number || '—'}</div>
+      <div class="row">${chemical.molecular_formula || ''}</div>
+      <div class="row">Qty: ${chemical.quantity ?? '—'} ${chemical.unit || ''}</div>
+      <div class="row">Loc: ${(chemical.location || '—').replace(/</g, '&lt;')}</div>
+      <div class="row mono">ID: ${barcode}</div>
+      ${hazards ? `<div class="haz">Hazards: ${hazards}</div>` : ''}
+      <p class="mono" style="margin-top:12px;word-break:break-all">${barcode}</p>
+    </div>
+    <p style="margin-top:12px"><button onclick="window.print()">Print label</button></p>
+    </body></html>`)
+  w.document.close()
+}
 
 /* ========================================================================== */
 /* SECTION 5 — PURE HELPERS                                                   */
@@ -612,6 +780,102 @@ const exportTransactionsCSV = (list) => {
   downloadCSV(`usage-history-${new Date().toISOString().slice(0, 10)}.csv`, rows)
 }
 
+/**
+ * Parse a chemicals CSV (header row required).
+ * Accepts headers matching exportChemicalsCSV or simple aliases.
+ */
+const parseChemicalsCSV = (text) => {
+  const lines = String(text || '')
+    .replace(/^\uFEFF/, '')
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+  if (lines.length < 2) return []
+
+  const parseRow = (line) => {
+    const cells = []
+    let cur = ''
+    let inQuotes = false
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]
+      if (inQuotes) {
+        if (ch === '"' && line[i + 1] === '"') {
+          cur += '"'
+          i++
+        } else if (ch === '"') {
+          inQuotes = false
+        } else {
+          cur += ch
+        }
+      } else if (ch === '"') {
+        inQuotes = true
+      } else if (ch === ',') {
+        cells.push(cur.trim())
+        cur = ''
+      } else {
+        cur += ch
+      }
+    }
+    cells.push(cur.trim())
+    return cells
+  }
+
+  const headers = parseRow(lines[0]).map((h) => h.toLowerCase())
+  const idx = (names) => {
+    for (const n of names) {
+      const i = headers.indexOf(n.toLowerCase())
+      if (i >= 0) return i
+    }
+    return -1
+  }
+
+  const iName = idx(['name', 'chemical', 'chemical name'])
+  const iCas = idx(['cas number', 'cas', 'cas_number'])
+  const iQty = idx(['quantity', 'qty', 'amount'])
+  const iUnit = idx(['unit'])
+  const iLoc = idx(['location', 'storage'])
+  const iBatch = idx(['batch / lot', 'batch', 'lot', 'batch_lot'])
+  const iSupplier = idx(['supplier'])
+  const iBarcode = idx(['barcode'])
+  const iExpiry = idx(['expiry date', 'expiry', 'expiry_date'])
+  const iMin = idx(['min stock', 'min_stock', 'minimum'])
+  const iFormula = idx(['molecular formula', 'formula', 'molecular_formula'])
+  const iNotes = idx(['hazard notes', 'notes', 'hazard_notes'])
+  const iHazards = idx(['hazard symbols', 'hazards', 'hazard_symbols'])
+  const iClasses = idx(['chemical classes', 'classes', 'chemical_classes'])
+
+  if (iName < 0) return []
+
+  const rows = []
+  for (let r = 1; r < lines.length; r++) {
+    const cells = parseRow(lines[r])
+    const name = (cells[iName] || '').trim()
+    if (!name) continue
+    const splitList = (v) =>
+      (v || '')
+        .split(/[;,|]/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+
+    rows.push({
+      name,
+      cas_number: iCas >= 0 ? cells[iCas] || null : null,
+      quantity: iQty >= 0 ? Number(cells[iQty]) || 0 : 0,
+      unit: iUnit >= 0 && cells[iUnit] ? cells[iUnit] : 'g',
+      location: iLoc >= 0 ? cells[iLoc] || null : null,
+      batch_lot: iBatch >= 0 ? cells[iBatch] || null : null,
+      supplier: iSupplier >= 0 ? cells[iSupplier] || null : null,
+      barcode: iBarcode >= 0 ? cells[iBarcode] || null : null,
+      expiry_date: iExpiry >= 0 && cells[iExpiry] ? cells[iExpiry] : null,
+      min_stock: iMin >= 0 ? Number(cells[iMin]) || 0 : 0,
+      molecular_formula: iFormula >= 0 ? cells[iFormula] || null : null,
+      hazard_notes: iNotes >= 0 ? cells[iNotes] || null : null,
+      hazard_symbols: iHazards >= 0 ? splitList(cells[iHazards]) : [],
+      chemical_classes: iClasses >= 0 ? splitList(cells[iClasses]) : [],
+    })
+  }
+  return rows
+}
+
 const generatePDFReport = (chemicalsList, title = 'Chemical Inventory Report') => {
   const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' })
   const pageWidth = doc.internal.pageSize.getWidth()
@@ -867,6 +1131,23 @@ function App() {
   const [inviteLoading, setInviteLoading] = useState(false)
   const [orgInvites, setOrgInvites] = useState([])
   const [orgMembers, setOrgMembers] = useState([])
+  const [lastInviteLink, setLastInviteLink] = useState('')
+
+  /* Phase A / competitive feature panels */
+  const [showAuditLog, setShowAuditLog] = useState(false)
+  const [auditEvents, setAuditEvents] = useState(() => loadJsonStorage(AUDIT_STORAGE_KEY, []))
+  const [showSdsReport, setShowSdsReport] = useState(false)
+  const [showWasteModal, setShowWasteModal] = useState(false)
+  const [wasteLog, setWasteLog] = useState(() => loadJsonStorage(WASTE_STORAGE_KEY, []))
+  const [wasteForm, setWasteForm] = useState({ chemical_id: '', quantity: '', unit: 'g', reason: '', notes: '' })
+  const [showDeleteAccount, setShowDeleteAccount] = useState(false)
+  const [deleteAccountConfirm, setDeleteAccountConfirm] = useState('')
+  const [deleteAccountLoading, setDeleteAccountLoading] = useState(false)
+  const [showArchived, setShowArchived] = useState(false)
+  const [labUnits, setLabUnits] = useState(() => loadJsonStorage(LAB_UNITS_STORAGE_KEY, []))
+  const [activeLabUnit, setActiveLabUnit] = useState(() => localStorage.getItem('activeLabUnit') || '')
+  const [scanActionMode, setScanActionMode] = useState('find') // find | take | return
+  const [autoEnrichBusy, setAutoEnrichBusy] = useState(false)
 
   /* ---------- Refs ---------- */
   const searchRef = useRef(null)
@@ -957,32 +1238,13 @@ function App() {
 
   const getAccessToken = useCallback(async () => {
     try {
-      const { data, error } = await supabase.auth.getSession()
-      if (error) {
-        console.warn('getSession error', error)
-        return null
-      }
-
-      const current = data?.session
-      if (!current?.access_token) return null
-
-      const expiresAt = current.expires_at
-      const now = Math.floor(Date.now() / 1000)
-      if (expiresAt && expiresAt - now < 60) {
-        const { data: refreshed, error: refreshError } =
-          await supabase.auth.refreshSession()
-        if (!refreshError && refreshed?.session?.access_token) {
-          return refreshed.session.access_token
-        }
-      }
-
-      return current.access_token
+      const { data: { session: current } } = await supabase.auth.getSession()
+      return current?.access_token || null
     } catch (error) {
       console.error('Error retrieving access token:', error)
       return null
     }
   }, [])
-
 
   /* ======================================================================== */
   /* IDLE AUTO-LOGOUT                                                         */
@@ -1312,10 +1574,7 @@ function App() {
       setChemicals(Array.isArray(data) ? data : [])
     } catch (error) {
       console.error('Failed to fetch chemicals:', error)
-      // only show toast for real user-visible failures
-      if (!silent) {
-        showMessage('error', 'Could not load chemicals. Please check your connection.')
-      }
+      showMessage('error', 'Could not load chemicals. Please check your connection.')
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -1358,6 +1617,154 @@ function App() {
     }
   }, [API_URL, getAccessToken])
 
+  const pushAudit = useCallback((action, detail = {}) => {
+    const row = appendAuditEvent({
+      action,
+      user_id: session?.user?.id || null,
+      user_email: session?.user?.email || null,
+      organization_id: activeOrgId || null,
+      workspace: workspaceMode,
+      ...detail,
+    })
+    setAuditEvents((prev) => [row, ...prev].slice(0, MAX_AUDIT_EVENTS))
+    return row
+  }, [session, activeOrgId, workspaceMode])
+
+  const copyInviteLink = async (inviteToken) => {
+    if (!inviteToken) {
+      showMessage('error', 'No invite token available')
+      return
+    }
+    const link = `${window.location.origin}/?token=${encodeURIComponent(inviteToken)}`
+    setLastInviteLink(link)
+    try {
+      await navigator.clipboard.writeText(link)
+      showMessage('success', 'Invite link copied — send it to the member')
+    } catch {
+      showMessage('success', `Invite link: ${link}`)
+    }
+  }
+
+  const handleDeleteAccount = async () => {
+    if (deleteAccountConfirm !== 'DELETE') {
+      showMessage('error', 'Type DELETE to confirm account deletion')
+      return
+    }
+    setDeleteAccountLoading(true)
+    try {
+      const token = await getAccessToken()
+      // Prefer backend endpoint if present
+      if (API_URL && token) {
+        try {
+          const res = await fetch(`${API_URL}/account`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${token}` },
+          })
+          if (!res.ok && res.status !== 404) {
+            const err = await res.json().catch(() => ({}))
+            console.warn('DELETE /account:', err)
+          }
+        } catch (e) {
+          console.warn('Account API not available:', e)
+        }
+      }
+      pushAudit('account_delete_requested', { email: session?.user?.email })
+      // Clear local app data for this browser
+      try {
+        localStorage.removeItem(AUDIT_STORAGE_KEY)
+        localStorage.removeItem(CHEM_META_STORAGE_KEY)
+        localStorage.removeItem(WASTE_STORAGE_KEY)
+        localStorage.removeItem('workspaceIntent')
+        localStorage.removeItem('accountMode')
+      } catch {
+        /* ignore */
+      }
+      await supabase.auth.signOut()
+      setSession(null)
+      setShowDeleteAccount(false)
+      showMessage(
+        'success',
+        'Signed out. If permanent server-side deletion is required, ensure DELETE /account is deployed or delete the user in Supabase Auth.'
+      )
+    } catch (err) {
+      showMessage('error', err.message || 'Could not complete account deletion flow')
+    } finally {
+      setDeleteAccountLoading(false)
+    }
+  }
+
+  const handleArchiveChemical = async (chemical) => {
+    if (!chemical?.id) return
+    setChemMeta(chemical.id, { archived: true })
+    pushAudit('chemical_archive', {
+      chemical_id: chemical.id,
+      chemical_name: chemical.name,
+    })
+    showMessage('success', `"${chemical.name}" archived (history kept)`)
+    // Force re-render filter
+    setChemicals((prev) => [...prev])
+  }
+
+  const handleUnarchiveChemical = (chemical) => {
+    if (!chemical?.id) return
+    setChemMeta(chemical.id, { archived: false })
+    pushAudit('chemical_unarchive', {
+      chemical_id: chemical.id,
+      chemical_name: chemical.name,
+    })
+    showMessage('success', `"${chemical.name}" restored`)
+    setChemicals((prev) => [...prev])
+  }
+
+  const handleMarkSdsReviewed = (chemical) => {
+    if (!chemical?.id) return
+    const today = new Date().toISOString().slice(0, 10)
+    setChemMeta(chemical.id, {
+      sds_reviewed_at: today,
+      sds_review_months: SDS_REVIEW_DEFAULT_MONTHS,
+    })
+    pushAudit('sds_reviewed', { chemical_id: chemical.id, chemical_name: chemical.name })
+    showMessage('success', `SDS marked reviewed for ${chemical.name}`)
+    setChemicals((prev) => [...prev])
+  }
+
+  const handleLogWaste = () => {
+    const chem = chemicals.find((c) => String(c.id) === String(wasteForm.chemical_id))
+    if (!chem) {
+      showMessage('error', 'Select a chemical')
+      return
+    }
+    const qty = parseFloat(wasteForm.quantity)
+    if (!(qty > 0)) {
+      showMessage('error', 'Enter a waste quantity')
+      return
+    }
+    const entry = {
+      id: `waste-${Date.now()}`,
+      at: new Date().toISOString(),
+      chemical_id: chem.id,
+      chemical_name: chem.name,
+      quantity: qty,
+      unit: wasteForm.unit || chem.unit || 'g',
+      reason: wasteForm.reason || 'disposal',
+      notes: wasteForm.notes || '',
+      user_email: session?.user?.email || '',
+      organization_id: activeOrgId || null,
+    }
+    const next = [entry, ...wasteLog].slice(0, 300)
+    setWasteLog(next)
+    saveJsonStorage(WASTE_STORAGE_KEY, next)
+    pushAudit('waste_logged', {
+      chemical_id: chem.id,
+      chemical_name: chem.name,
+      quantity: qty,
+      unit: entry.unit,
+    })
+    setShowWasteModal(false)
+    setWasteForm({ chemical_id: '', quantity: '', unit: 'g', reason: '', notes: '' })
+    showMessage('success', 'Waste/disposal entry recorded')
+  }
+
   const handleInviteMember = async () => {
     if (!activeOrgId) {
       showMessage('error', 'Select an organization first')
@@ -1385,13 +1792,30 @@ function App() {
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error(err.detail || 'Invite failed')
+        const detail = err.detail
+        throw new Error(
+          typeof detail === 'string'
+            ? detail
+            : Array.isArray(detail)
+              ? detail.map((d) => d.msg || JSON.stringify(d)).join('; ')
+              : 'Invite failed'
+        )
       }
       const invite = await res.json()
-      showMessage(
-        'success',
-        `Invite created for ${email}. Token: ${invite.token || 'check invites list'}`
-      )
+      const inviteToken = invite.token
+      pushAudit('invite_create', {
+        email,
+        role: inviteRole || 'member',
+        invite_id: invite.id,
+      })
+      if (inviteToken) {
+        await copyInviteLink(inviteToken)
+      } else {
+        showMessage(
+          'success',
+          `Invite created for ${email}. Open pending invites to copy the link.`
+        )
+      }
       setInviteEmail('')
       setInviteRole('member')
       await fetchOrgInvites(activeOrgId)
@@ -1524,7 +1948,7 @@ function App() {
     }
   }
 
-  const fetchOrganizations = useCallback(async () => {
+  const fetchOrganizations = async () => {
     try {
       const token = await getAccessToken()
       if (!token) return
@@ -1537,7 +1961,7 @@ function App() {
     } catch (err) {
       console.warn('Could not load organizations', err)
     }
-  }, [API_URL, getAccessToken])
+  }
 
   const fetchTransactions = useCallback(async () => {
     try {
@@ -1556,105 +1980,42 @@ function App() {
   }, [API_URL, getAccessToken])
 
   useEffect(() => {
-    if (!session) return
-    fetchChemicals()
-    fetchTransactions()
-    fetchOrganizations()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, activeOrgId])
+    if (session) {
+      fetchChemicals()
+      fetchTransactions()
+      fetchOrganizations()
+    }
+  }, [session, fetchChemicals, fetchTransactions, fetchOrganizations]) // eslint-disable-line react-hooks/exhaustive-deps
+
   /* Apply Login Personal / Organization intent once per session */
   useEffect(() => {
     if (!session) return
-
-    ;(async () => {
-      try {
-        // Prefer localStorage intent from Login; fall back to user_metadata
-        let intent = null
-        try {
-          const raw = localStorage.getItem('workspaceIntent')
-          if (raw) intent = JSON.parse(raw)
-        } catch {
-          intent = null
-        }
-
-        const meta = session.user?.user_metadata || {}
-        const type =
-          intent?.type ||
-          meta.account_type ||
-          accountMode ||
-          'personal'
-        const orgName = (
-          intent?.organizationName ||
-          meta.pending_org_name ||
-          ''
-        ).trim()
-
-        if (intent) {
-          try {
-            localStorage.removeItem('workspaceIntent')
-          } catch {
-            // ignore
+    try {
+      const raw = localStorage.getItem('workspaceIntent')
+      if (raw) {
+        const intent = JSON.parse(raw)
+        localStorage.removeItem('workspaceIntent')
+        if (intent?.type === 'organization') {
+          setAccountMode('organization')
+          localStorage.setItem('accountMode', 'organization')
+          if (intent.organizationName) {
+            setNewOrgName(intent.organizationName)
+            setShowCreateOrg(true)
           }
-        }
-
-        if (type !== 'organization') {
+        } else {
           setAccountMode('personal')
           localStorage.setItem('accountMode', 'personal')
           switchWorkspace({ mode: 'personal', organization_id: null })
-          return
         }
-
-        // Organization account
-        setAccountMode('organization')
-        localStorage.setItem('accountMode', 'organization')
-
-        const token = await getAccessToken()
-        if (!token) return
-
-        // Already a member of an org? use it
-        const listRes = await fetch(`${API_URL}/organizations`, {
-          headers: { Authorization: `Bearer ${token}` },
-        })
-        const orgs = listRes.ok ? await listRes.json() : []
-        setOrganizations(Array.isArray(orgs) ? orgs : [])
-
-        if (Array.isArray(orgs) && orgs.length > 0) {
-          switchToOrganization(orgs[0])
-          return
-        }
-
-        // First login: create org from signup name
-        if (!orgName || orgName.length < 2) {
-          setNewOrgName('')
-          setShowCreateOrg(true) // ask for name if missing
-          return
-        }
-
-        const createRes = await fetch(`${API_URL}/organizations`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ name: orgName }),
-        })
-
-        if (!createRes.ok) {
-          setNewOrgName(orgName)
-          setShowCreateOrg(true)
-          showMessage('error', 'Could not create organization automatically')
-          return
-        }
-
-        const org = await createRes.json()
-        setOrganizations([org])
-        switchToOrganization(org)
-        setShowCreateOrg(false)
-        showMessage('success', `Organization “${org.name}” is ready`)
-      } catch (err) {
-        console.warn('Org setup failed', err)
+        return
       }
-    })()
+      // No fresh intent — keep saved accountMode and enforce workspace
+      if (accountMode === 'personal') {
+        switchWorkspace({ mode: 'personal', organization_id: null })
+      }
+    } catch {
+      // ignore
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session])
 
@@ -1700,12 +2061,32 @@ function App() {
       const token = await getAccessToken()
       if (!token) throw new Error('No access token')
 
+      const locationJoined = joinLocationPath(formData)
+      const barcode =
+        formData.barcode.trim() || (!editingId ? generateBarcodeValue() : null)
+
+      // Duplicate detection (same CAS + location)
+      const dups = findDuplicateChemicals(chemicals, {
+        cas_number: formData.cas_number,
+        location: locationJoined,
+        excludeId: editingId,
+      })
+      if (dups.length > 0) {
+        const ok = window.confirm(
+          `Possible duplicate: ${dups.length} chemical(s) already have CAS "${formData.cas_number.trim()}" at "${locationJoined || 'Unassigned'}".\n\nContinue saving as a new container/bottle?`
+        )
+        if (!ok) {
+          setSubmitting(false)
+          return
+        }
+      }
+
       const payload = {
         name: formData.name.trim(),
         cas_number: formData.cas_number.trim() || null,
         quantity: parseFloat(formData.quantity) || 0,
         unit: formData.unit || 'g',
-        location: formData.location.trim() || null,
+        location: locationJoined || null,
         expiry_date: formData.expiry_date || null,
         min_stock: parseFloat(formData.min_stock) || 0,
         hazard_notes: formData.hazard_notes.trim() || null,
@@ -1716,7 +2097,7 @@ function App() {
         chemical_classes: formData.chemical_classes?.length
           ? formData.chemical_classes
           : null,
-        barcode: formData.barcode.trim() || null,
+        barcode: barcode || null,
         organization_id: workspaceMode === 'organization' ? activeOrgId : null,
       }
 
@@ -1734,6 +2115,27 @@ function App() {
       })
 
       if (!response.ok) throw new Error(`Save failed with status ${response.status}`)
+      let saved = null
+      try {
+        saved = await response.json()
+      } catch {
+        saved = null
+      }
+      const savedId = saved?.id || editingId
+      if (savedId) {
+        setChemMeta(savedId, {
+          sds_reviewed_at: formData.sds_reviewed_at || undefined,
+          sds_review_months: Number(formData.sds_review_months) || SDS_REVIEW_DEFAULT_MONTHS,
+          container_code: formData.container_code || undefined,
+          lab_unit: formData.lab_unit || activeLabUnit || undefined,
+          location_path: locationJoined || undefined,
+        })
+      }
+      pushAudit(editingId ? 'chemical_update' : 'chemical_create', {
+        chemical_id: savedId,
+        chemical_name: payload.name,
+        location: locationJoined,
+      })
       showMessage('success', editingId ? 'Chemical updated successfully' : 'Chemical added successfully')
       resetForm()
       fetchChemicals(true)
@@ -1750,7 +2152,10 @@ function App() {
   /* ======================================================================== */
 
   const handleDelete = async (id, name) => {
-    if (!window.confirm(`Delete "${name}" permanently? This cannot be undone.`)) return
+    const choice = window.confirm(
+      `Delete "${name}"?\n\nOK = permanent delete\nCancel = stay\n\nTip: use Archive to keep history.`
+    )
+    if (!choice) return
     try {
       const token = await getAccessToken()
       const response = await fetch(`${API_URL}/chemicals/${id}`, {
@@ -1758,6 +2163,7 @@ function App() {
         headers: { Authorization: `Bearer ${token}` },
       })
       if (!response.ok) throw new Error('Delete failed')
+      pushAudit('chemical_delete', { chemical_id: id, chemical_name: name })
       showMessage('success', `"${name}" has been deleted`)
       setSelectedIds((prev) => {
         const next = new Set(prev)
@@ -1990,6 +2396,55 @@ function App() {
     showMessage('success', 'Full PDF report generated')
   }
 
+  const csvImportRef = useRef(null)
+
+  const handleImportCSV = async (file) => {
+    if (!file) return
+    try {
+      const text = await file.text()
+      const rows = parseChemicalsCSV(text)
+      if (!rows.length) {
+        showMessage('error', 'No valid chemical rows found. Need a Name column.')
+        return
+      }
+      const token = await getAccessToken()
+      if (!token) throw new Error('Not signed in')
+
+      let ok = 0
+      let fail = 0
+      for (const row of rows) {
+        try {
+          const body = {
+            ...row,
+            organization_id: activeOrgId || null,
+          }
+          const res = await fetch(`${API_URL}/chemicals`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(body),
+          })
+          if (res.ok) ok += 1
+          else fail += 1
+        } catch {
+          fail += 1
+        }
+      }
+      await fetchChemicals(true)
+      showMessage(
+        fail ? 'error' : 'success',
+        `CSV import finished: ${ok} added${fail ? `, ${fail} failed` : ''}`
+      )
+    } catch (err) {
+      console.error('CSV import error:', err)
+      showMessage('error', err.message || 'CSV import failed')
+    } finally {
+      if (csvImportRef.current) csvImportRef.current.value = ''
+    }
+  }
+
   /* ======================================================================== */
   /* FORM HELPERS                                                             */
   /* ======================================================================== */
@@ -2066,12 +2521,19 @@ function App() {
   }
 
   const handleEdit = (chemical) => {
+    const path = splitLocationPath(chemical.location)
+    const meta = getChemMeta(chemical.id)
     setFormData({
+      ...EMPTY_FORM,
       name: chemical.name || '',
       cas_number: chemical.cas_number || '',
       quantity: chemical.quantity ?? '',
       unit: chemical.unit || 'g',
       location: chemical.location || '',
+      loc_building: path.loc_building,
+      loc_room: path.loc_room,
+      loc_cabinet: path.loc_cabinet,
+      loc_shelf: path.loc_shelf,
       expiry_date: chemical.expiry_date || '',
       min_stock: chemical.min_stock ?? '',
       hazard_notes: chemical.hazard_notes || '',
@@ -2081,6 +2543,10 @@ function App() {
       supplier: chemical.supplier || '',
       chemical_classes: chemical.chemical_classes || [],
       barcode: chemical.barcode || '',
+      sds_reviewed_at: meta.sds_reviewed_at || '',
+      sds_review_months: String(meta.sds_review_months || SDS_REVIEW_DEFAULT_MONTHS),
+      container_code: meta.container_code || '',
+      lab_unit: meta.lab_unit || activeLabUnit || '',
     })
     setEditingId(chemical.id)
     setShowForm(true)
@@ -2253,6 +2719,10 @@ function App() {
   const filtered = useMemo(() => {
     const query = search.toLowerCase().trim()
     let result = chemicals.filter((chemical) => {
+      const archived = Boolean(getChemMeta(chemical.id).archived)
+      if (!showArchived && archived) return false
+      if (showArchived && !archived) return false
+
       const matchesSearch =
         !query ||
         chemical.name?.toLowerCase().includes(query) ||
@@ -2271,6 +2741,10 @@ function App() {
       if (filter === 'no-sds') return !chemical.sds_filename
       if (locationFilter && chemical.location !== locationFilter) return false
       if (hazardFilter && !(chemical.hazard_symbols || []).includes(hazardFilter)) return false
+      if (activeLabUnit) {
+        const meta = getChemMeta(chemical.id)
+        if (meta.lab_unit && meta.lab_unit !== activeLabUnit) return false
+      }
       return true
     })
 
@@ -2303,7 +2777,7 @@ function App() {
       }
     })
     return result
-  }, [chemicals, search, filter, sortBy, locationFilter, hazardFilter])
+  }, [chemicals, search, filter, sortBy, locationFilter, hazardFilter, showArchived, activeLabUnit])
 
   const displayedChemicals = useMemo(() => {
     if (mainView === 'collection') {
@@ -2332,16 +2806,21 @@ function App() {
     return list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
   }, [transactions, historyFilter, historySearch])
 
-  const stats = useMemo(
-    () => ({
-      total: chemicals.length,
+  const stats = useMemo(() => {
+    const total = chemicals.length
+    const missingSds = chemicals.filter((c) => !c.sds_filename).length
+    const withSds = total - missingSds
+    const sdsPercent = total === 0 ? 100 : Math.round((withSds / total) * 100)
+    return {
+      total,
       low: chemicals.filter(isLow).length,
       expired: chemicals.filter(isExpired).length,
       soon: chemicals.filter(isExpiringSoon).length,
-      missingSds: chemicals.filter((c) => !c.sds_filename).length,
-    }),
-    [chemicals]
-  )
+      missingSds,
+      withSds,
+      sdsPercent,
+    }
+  }, [chemicals])
 
 
   /* Close header ⋯ menu when clicking outside */
@@ -2552,18 +3031,6 @@ function App() {
                   >
                     <span>ℹ️</span> Hazard legend
                   </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="header-menu-item"
-                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
-                    onClick={() => {
-                      fetchChemicals()
-                      setHeaderMenuOpen(false)
-                    }}
-                  >
-                    <span>🔄</span> Refresh data
-                  </button>
                   {accountMode === 'organization' && (
                     <>
                       <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
@@ -2602,11 +3069,74 @@ function App() {
                     className="header-menu-item"
                     style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
                     onClick={() => {
+                      setAuditEvents(loadJsonStorage(AUDIT_STORAGE_KEY, []))
+                      setShowAuditLog(true)
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>📜</span> Audit log
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    onClick={() => {
+                      setShowSdsReport(true)
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>📄</span> SDS review report
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    onClick={() => {
+                      setShowWasteModal(true)
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>🗑️</span> Log waste / disposal
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    onClick={() => {
+                      setShowArchived((v) => !v)
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>📦</span> {showArchived ? 'Show active inventory' : 'Show archived'}
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    onClick={() => {
                       setShowLanding(true)
                       setHeaderMenuOpen(false)
                     }}
                   >
                     <span>ℹ️</span> About
+                  </button>
+                  <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left', color: 'var(--danger, #dc2626)' }}
+                    onClick={() => {
+                      setDeleteAccountConfirm('')
+                      setShowDeleteAccount(true)
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>⚠️</span> Delete account…
                   </button>
                 </div>
               )}
@@ -2765,6 +3295,13 @@ function App() {
               <span className="stat-value">{stats.missingSds}</span>
               <span className="stat-label">Missing SDS</span>
             </div>
+            <div
+              className={`stat-card ${stats.sdsPercent < 80 ? 'caution' : ''}`}
+              title={`${stats.withSds} of ${stats.total} have SDS`}
+            >
+              <span className="stat-value">{stats.sdsPercent}%</span>
+              <span className="stat-label">SDS Complete</span>
+            </div>
             <div className={`stat-card ${compatibilityIssues.length ? 'danger' : ''}`}>
               <span className="stat-value">{compatibilityIssues.length}</span>
               <span className="stat-label">Compat. Issues</span>
@@ -2850,6 +3387,13 @@ function App() {
             <div className={`stat-card ${stats.missingSds ? 'muted' : ''}`}>
               <span className="stat-value">{stats.missingSds}</span>
               <span className="stat-label">Missing SDS</span>
+            </div>
+            <div
+              className={`stat-card ${stats.sdsPercent < 80 ? 'caution' : ''}`}
+              title={`${stats.withSds} of ${stats.total} have SDS`}
+            >
+              <span className="stat-value">{stats.sdsPercent}%</span>
+              <span className="stat-label">SDS Complete</span>
             </div>
             {refreshing && <div className="refresh-indicator">Refreshing…</div>}
           </div>
@@ -2956,8 +3500,28 @@ function App() {
                     <button type="button" onClick={handleExportPDFAll}>
                       PDF (All)
                     </button>
+                    <div className="export-divider" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExportOpen(false)
+                        csvImportRef.current?.click()
+                      }}
+                    >
+                      Import CSV…
+                    </button>
                   </div>
                 )}
+                <input
+                  ref={csvImportRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  hidden
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    if (f) handleImportCSV(f)
+                  }}
+                />
               </div>
 
               <button
@@ -3074,15 +3638,51 @@ function App() {
                       </select>
                     </div>
 
-                    <div className="form-group">
-                      <label htmlFor="location">Location</label>
-                      <input
-                        id="location"
-                        name="location"
-                        value={formData.location}
-                        onChange={handleChange}
-                        placeholder="e.g. Cabinet A"
-                      />
+                    <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                      <label>Location (hierarchy)</label>
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+                          gap: 8,
+                        }}
+                      >
+                        <input
+                          name="loc_building"
+                          value={formData.loc_building || ''}
+                          onChange={handleChange}
+                          placeholder="Building"
+                          aria-label="Building"
+                        />
+                        <input
+                          name="loc_room"
+                          value={formData.loc_room || ''}
+                          onChange={handleChange}
+                          placeholder="Room / lab"
+                          aria-label="Room"
+                        />
+                        <input
+                          name="loc_cabinet"
+                          value={formData.loc_cabinet || ''}
+                          onChange={handleChange}
+                          placeholder="Cabinet"
+                          aria-label="Cabinet"
+                        />
+                        <input
+                          name="loc_shelf"
+                          value={formData.loc_shelf || ''}
+                          onChange={handleChange}
+                          placeholder="Shelf / box"
+                          aria-label="Shelf"
+                        />
+                      </div>
+                      <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 6 }}>
+                        Saved as:{' '}
+                        <strong>
+                          {joinLocationPath(formData) || formData.location || '—'}
+                        </strong>
+                        {autoEnrichBusy ? ' · enriching…' : ''}
+                      </p>
                     </div>
 
                     <div className="form-group">
@@ -3370,6 +3970,11 @@ function App() {
                 <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: 12 }}>
                   Organization: <strong>{activeOrgName || 'Current org'}</strong>
                 </p>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: 12 }}>
+                  Invites create a secure token. Copy the link and send it to the member (email
+                  delivery is optional and requires a mail provider). They sign in and the app
+                  accepts <code>?token=...</code> automatically.
+                </p>
 
                 <div style={{ display: 'grid', gap: 10, marginBottom: 16 }}>
                   <input
@@ -3377,6 +3982,7 @@ function App() {
                     placeholder="Email address"
                     value={inviteEmail}
                     onChange={(e) => setInviteEmail(e.target.value)}
+                    autoComplete="email"
                   />
                   <select
                     className="search-input"
@@ -3391,8 +3997,33 @@ function App() {
                     onClick={handleInviteMember}
                     disabled={inviteLoading}
                   >
-                    {inviteLoading ? 'Sending…' : 'Create Invite'}
+                    {inviteLoading ? 'Creating…' : 'Create invite & copy link'}
                   </button>
+                  {lastInviteLink && (
+                    <div
+                      style={{
+                        padding: 10,
+                        borderRadius: 10,
+                        border: '1px solid var(--border)',
+                        fontSize: '0.8rem',
+                        wordBreak: 'break-all',
+                      }}
+                    >
+                      <strong>Last link:</strong> {lastInviteLink}
+                      <div style={{ marginTop: 8 }}>
+                        <button
+                          type="button"
+                          className="btn-sm"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(lastInviteLink)
+                            showMessage('success', 'Link copied again')
+                          }}
+                        >
+                          Copy again
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <h4 style={{ margin: '8px 0' }}>Pending invites</h4>
@@ -3419,15 +4050,26 @@ function App() {
                             <div style={{ fontWeight: 600 }}>{invite.email}</div>
                             <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                               Role: {invite.role}
-                              {invite.token ? ` · token: ${invite.token}` : ''}
                             </div>
                           </div>
-                          <button
-                            className="btn-sm btn-danger"
-                            onClick={() => handleRevokeInvite(invite.id)}
-                          >
-                            Revoke
-                          </button>
+                          <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                            {invite.token && (
+                              <button
+                                className="btn-sm"
+                                type="button"
+                                onClick={() => copyInviteLink(invite.token)}
+                              >
+                                Copy link
+                              </button>
+                            )}
+                            <button
+                              className="btn-sm btn-danger"
+                              type="button"
+                              onClick={() => handleRevokeInvite(invite.id)}
+                            >
+                              Revoke
+                            </button>
+                          </div>
                         </div>
                       ))}
                   </div>
@@ -3870,6 +4512,35 @@ function App() {
                             <button className="btn-sm" onClick={() => handleEdit(chem)}>
                               Edit
                             </button>
+                            <button className="btn-sm" type="button" onClick={() => printChemicalLabel(chem)}>
+                              Label
+                            </button>
+                            {showArchived || getChemMeta(chem.id).archived ? (
+                              <button
+                                className="btn-sm"
+                                type="button"
+                                onClick={() => handleUnarchiveChemical(chem)}
+                              >
+                                Restore
+                              </button>
+                            ) : (
+                              <button
+                                className="btn-sm"
+                                type="button"
+                                onClick={() => handleArchiveChemical(chem)}
+                              >
+                                Archive
+                              </button>
+                            )}
+                            {chem.sds_filename && (
+                              <button
+                                className="btn-sm"
+                                type="button"
+                                onClick={() => handleMarkSdsReviewed(chem)}
+                              >
+                                SDS✓
+                              </button>
+                            )}
                             <button
                               className="btn-sm"
                               onClick={() => toggleCollection(chem)}
@@ -4305,6 +4976,205 @@ function App() {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================== AUDIT LOG ===================== */}
+      {showAuditLog && (
+        <div className="modal-overlay" onClick={() => setShowAuditLog(false)}>
+          <div className="modal" style={{ maxWidth: 720 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Audit log (append-only)</h3>
+              <button className="icon-btn" onClick={() => setShowAuditLog(false)}>✕</button>
+            </div>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: 12 }}>
+              Client-side compliance trail for this browser. Pair with server audit when available.
+            </p>
+            <div style={{ maxHeight: 420, overflow: 'auto', display: 'grid', gap: 8 }}>
+              {auditEvents.length === 0 ? (
+                <p style={{ color: 'var(--text-muted)' }}>No events yet</p>
+              ) : (
+                auditEvents.map((ev) => (
+                  <div
+                    key={ev.id}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 10,
+                      padding: '10px 12px',
+                      fontSize: '0.85rem',
+                    }}
+                  >
+                    <strong>{ev.action}</strong>
+                    <div style={{ color: 'var(--text-muted)' }}>
+                      {formatDateTime(ev.at)} · {ev.user_email || ev.user_id || '—'}
+                    </div>
+                    {ev.chemical_name && <div>{ev.chemical_name}</div>}
+                    {ev.email && <div>Invitee: {ev.email}</div>}
+                    {ev.location && <div>Location: {ev.location}</div>}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================== SDS REVIEW REPORT ===================== */}
+      {showSdsReport && (
+        <div className="modal-overlay" onClick={() => setShowSdsReport(false)}>
+          <div className="modal" style={{ maxWidth: 720 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>SDS missing / outdated report</h3>
+              <button className="icon-btn" onClick={() => setShowSdsReport(false)}>✕</button>
+            </div>
+            <div style={{ maxHeight: 420, overflow: 'auto', display: 'grid', gap: 8 }}>
+              {chemicals.filter((c) => isSdsReviewOverdue(c) || !c.sds_filename).length === 0 ? (
+                <p style={{ color: 'var(--text-muted)' }}>All SDS files look current.</p>
+              ) : (
+                chemicals
+                  .filter((c) => isSdsReviewOverdue(c) || !c.sds_filename)
+                  .map((c) => {
+                    const meta = getChemMeta(c.id)
+                    return (
+                      <div
+                        key={c.id}
+                        style={{
+                          border: '1px solid var(--border)',
+                          borderRadius: 10,
+                          padding: '10px 12px',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          gap: 8,
+                          alignItems: 'center',
+                        }}
+                      >
+                        <div>
+                          <strong>{c.name}</strong>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            {!c.sds_filename
+                              ? 'Missing SDS file'
+                              : `Last reviewed: ${meta.sds_reviewed_at || 'never'}`}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          {c.sds_filename && (
+                            <button className="btn-sm" type="button" onClick={() => handleMarkSdsReviewed(c)}>
+                              Mark reviewed
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================== WASTE / DISPOSAL ===================== */}
+      {showWasteModal && (
+        <div className="modal-overlay" onClick={() => setShowWasteModal(false)}>
+          <div className="modal" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Log waste / disposal</h3>
+              <button className="icon-btn" onClick={() => setShowWasteModal(false)}>✕</button>
+            </div>
+            <div style={{ display: 'grid', gap: 10 }}>
+              <select
+                className="search-input"
+                value={wasteForm.chemical_id}
+                onChange={(e) => setWasteForm((p) => ({ ...p, chemical_id: e.target.value }))}
+              >
+                <option value="">Select chemical…</option>
+                {chemicals.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  className="search-input"
+                  type="number"
+                  step="any"
+                  placeholder="Quantity"
+                  value={wasteForm.quantity}
+                  onChange={(e) => setWasteForm((p) => ({ ...p, quantity: e.target.value }))}
+                />
+                <select
+                  className="search-input"
+                  value={wasteForm.unit}
+                  onChange={(e) => setWasteForm((p) => ({ ...p, unit: e.target.value }))}
+                >
+                  {UNITS.map((u) => (
+                    <option key={u} value={u}>
+                      {u}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <input
+                className="search-input"
+                placeholder="Reason (e.g. expired, spill, lab clean-out)"
+                value={wasteForm.reason}
+                onChange={(e) => setWasteForm((p) => ({ ...p, reason: e.target.value }))}
+              />
+              <input
+                className="search-input"
+                placeholder="Notes"
+                value={wasteForm.notes}
+                onChange={(e) => setWasteForm((p) => ({ ...p, notes: e.target.value }))}
+              />
+              <button className="btn btn-primary" type="button" onClick={handleLogWaste}>
+                Record disposal
+              </button>
+              {wasteLog.length > 0 && (
+                <div style={{ maxHeight: 160, overflow: 'auto', fontSize: '0.8rem' }}>
+                  {wasteLog.slice(0, 8).map((w) => (
+                    <div key={w.id} style={{ marginBottom: 6 }}>
+                      {formatDateTime(w.at)} — {w.chemical_name}: {w.quantity} {w.unit} ({w.reason})
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================== DELETE ACCOUNT ===================== */}
+      {showDeleteAccount && (
+        <div className="modal-overlay" onClick={() => setShowDeleteAccount(false)}>
+          <div className="modal" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Delete account</h3>
+              <button className="icon-btn" onClick={() => setShowDeleteAccount(false)}>✕</button>
+            </div>
+            <p style={{ fontSize: '0.9rem', marginBottom: 12 }}>
+              This signs you out and clears local data. Permanent removal from Supabase Auth requires
+              a server <code>DELETE /account</code> endpoint or manual admin delete.
+            </p>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: 8 }}>
+              Type <strong>DELETE</strong> to confirm.
+            </p>
+            <input
+              className="search-input"
+              value={deleteAccountConfirm}
+              onChange={(e) => setDeleteAccountConfirm(e.target.value)}
+              placeholder="DELETE"
+              autoComplete="off"
+            />
+            <button
+              className="btn btn-danger"
+              style={{ marginTop: 12 }}
+              type="button"
+              disabled={deleteAccountLoading}
+              onClick={handleDeleteAccount}
+            >
+              {deleteAccountLoading ? 'Working…' : 'Delete my account'}
+            </button>
           </div>
         </div>
       )}
