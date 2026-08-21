@@ -115,13 +115,10 @@ const HAZARD_OPTIONS = [
   { id: 'oxidizing', label: 'Oxidizing', emoji: '⚗️', color: '#eab308', icon: pictogramOxidizing },
   { id: 'gas', label: 'Compressed Gas', emoji: '🧴', color: '#3b82f6', icon: pictogramGas },
   { id: 'corrosive', label: 'Corrosive', emoji: '🧪', color: '#a855f7', icon: pictogramCorrosive },
-  { id: 'toxic', label: 'Toxic', emoji: '☠️', color: '#64748b', icon: pictogramToxic },
   { id: 'harmful', label: 'Harmful / Irritant', emoji: '⚠️', color: '#f59e0b', icon: pictogramHarmful },
-  { id: 'health', label: 'Health Hazard', emoji: '🫁', color: '#ec4899', icon: pictogramHealth },
   { id: 'environmental', label: 'Environmental', emoji: '🌍', color: '#22c55e', icon: pictogramEnvironmental },
   { id: 'acute_toxicity', label: 'Acute Toxicity', emoji: '☠️', color: '#7f1d1d', icon: pictogramToxic },
   { id: 'carcinogen', label: 'Carcinogen', emoji: '☢️', color: '#9f1239', icon: pictogramHealth },
-  { id: 'aspiration', label: 'Aspiration Hazard', emoji: '🫁', color: '#be185d', icon: pictogramHealth },
   { id: 'biohazard', label: 'Biohazard', emoji: '☣️', color: '#166534', icon: pictogramBiohazard },
 ]
 
