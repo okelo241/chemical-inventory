@@ -235,8 +235,12 @@ def _cache_set(token: str, user: dict) -> None:
 
 def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     """
-    Validate Supabase access token locally with JWT secret.
-    Falls back to supabase.auth.get_user only if SUPABASE_JWT_SECRET is unset.
+    Validate Supabase access token.
+
+    1) Local HS256 verify when SUPABASE_JWT_SECRET is set (legacy projects).
+    2) On any local failure (wrong secret, ES256/asymmetric JWT, aud mismatch),
+       fall back to supabase.auth.get_user(token) using the service client.
+    3) If secret is unset, use remote get_user only.
     """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing authorization token")
@@ -249,7 +253,9 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     if cached is not None:
         return cached
 
-    # --- Preferred: local HS256 verify ---
+    jwt_error = None
+
+    # --- Try local HS256 verify (may fail on new Supabase asymmetric JWTs) ---
     if SUPABASE_JWT_SECRET:
         try:
             try:
@@ -267,37 +273,41 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
                     algorithms=["HS256"],
                     options={"require": ["exp", "sub"], "verify_aud": False},
                 )
+
+            user_id = payload.get("sub")
+            if user_id:
+                email = payload.get("email")
+                if not email and isinstance(payload.get("user_metadata"), dict):
+                    email = payload["user_metadata"].get("email")
+                result = {
+                    "id": str(user_id),
+                    "email": email,
+                    "role": payload.get("role"),
+                }
+                _cache_set(token, result)
+                return result
         except jwt.ExpiredSignatureError:
-            raise HTTPException(status_code=401, detail="Token expired")
+            # Truly expired — do not fall back (get_user would also fail)
+            raise HTTPException(status_code=401, detail="Token expired — please sign in again")
         except jwt.PyJWTError as e:
-            print("Auth error (JWT):", e)
-            raise HTTPException(status_code=401, detail="Invalid or expired token")
+            jwt_error = e
+            print("Auth local JWT failed, will try supabase.auth.get_user:", repr(e))
 
-        user_id = payload.get("sub")
-        if not user_id:
-            raise HTTPException(status_code=401, detail="Invalid token")
-
-        email = payload.get("email")
-        if not email and isinstance(payload.get("user_metadata"), dict):
-            email = payload["user_metadata"].get("email")
-
-        result = {
-            "id": str(user_id),
-            "email": email,
-            "role": payload.get("role"),
-        }
-        _cache_set(token, result)
-        return result
-
-    # --- Fallback: remote get_user (only if secret not configured) ---
+    # --- Remote validation via Supabase Auth API (works with service or anon key) ---
     if supabase is None:
-        raise HTTPException(status_code=500, detail="Supabase is not configured")
+        detail = "Supabase is not configured on the API"
+        if jwt_error:
+            detail = f"Token could not be verified ({jwt_error}). SUPABASE_SERVICE_KEY missing."
+        raise HTTPException(status_code=500, detail=detail)
 
     try:
         user_response = supabase.auth.get_user(token)
-        user = user_response.user
-        if not user or not user.id:
-            raise HTTPException(status_code=401, detail="Invalid token")
+        user = getattr(user_response, "user", None)
+        if not user or not getattr(user, "id", None):
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or expired token — please sign out and sign in again",
+            )
         result = {
             "id": str(user.id),
             "email": getattr(user, "email", None),
@@ -307,8 +317,11 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     except HTTPException:
         raise
     except Exception as e:
-        print("Auth error:", str(e))
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        print("Auth error (get_user):", repr(e))
+        raise HTTPException(
+            status_code=401,
+            detail=f"Invalid or expired token — please sign in again ({e})",
+        )
 
 
 def get_current_user_id(authorization: Optional[str] = Header(None)) -> str:

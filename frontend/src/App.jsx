@@ -1248,8 +1248,9 @@ function App() {
     }
   }
 
-  const getAccessToken = useCallback(async () => {
-    const tokenExpiresSoon = (accessToken, skewSec = 90) => {
+  const getAccessToken = useCallback(async (opts = {}) => {
+    const forceRefresh = Boolean(opts.forceRefresh)
+    const tokenExpiresSoon = (accessToken, skewSec = 120) => {
       if (!accessToken) return true
       try {
         const part = accessToken.split('.')[1]
@@ -1266,9 +1267,19 @@ function App() {
     try {
       const { data: { session: current } } = await supabase.auth.getSession()
       let sess = current
-      if (!sess?.access_token || tokenExpiresSoon(sess.access_token)) {
+      if (
+        forceRefresh ||
+        !sess?.access_token ||
+        tokenExpiresSoon(sess.access_token)
+      ) {
         const { data, error } = await supabase.auth.refreshSession()
-        if (!error && data?.session) sess = data.session
+        if (!error && data?.session) {
+          sess = data.session
+          // Keep React session state in sync when we refreshed
+          if (data.session) setSession(data.session)
+        } else if (error) {
+          console.warn('refreshSession:', error.message || error)
+        }
       }
       return sess?.access_token || null
     } catch (error) {
@@ -2160,9 +2171,10 @@ function App() {
     }
     setOrgLoading(true)
     try {
-      const token = await getAccessToken()
+      // Force a fresh access token — stale JWT causes "Invalid or expired token"
+      const token = await getAccessToken({ forceRefresh: true })
       if (!token) {
-        throw new Error('Not signed in. Please sign in again and retry.')
+        throw new Error('Not signed in. Please sign out and sign in again, then retry.')
       }
       if (!API_URL) {
         throw new Error('API URL is not configured (VITE_API_URL).')
@@ -2356,10 +2368,11 @@ function App() {
           return
         }
 
-        const token = await getAccessToken()
+        const token = await getAccessToken({ forceRefresh: true })
         if (!token) {
           setNewOrgName(orgName)
           setShowCreateOrg(true)
+          showMessage('error', 'Session expired. Please sign in again to create your organization.')
           return
         }
 
