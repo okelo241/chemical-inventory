@@ -397,33 +397,111 @@ const findDuplicateChemicals = (list, { cas_number, location, excludeId }) => {
 
 const printChemicalLabel = (chemical) => {
   if (!chemical) return
+  const esc = (s) =>
+    String(s ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
   const hazards = asArray(chemical.hazard_symbols).join(', ')
-  const w = window.open('', '_blank', 'noopener,noreferrer,width=420,height=560')
-  if (!w) return
-  const barcode = chemical.barcode || `CHEM-${chemical.id}`
-  w.document.write(`<!DOCTYPE html><html><head><title>Label — ${chemical.name}</title>
-    <style>
-      body{font-family:system-ui,sans-serif;padding:16px;color:#0f172a}
-      .card{border:2px solid #0f172a;border-radius:12px;padding:16px;max-width:360px}
-      h1{font-size:18px;margin:0 0 8px}
-      .mono{font-family:ui-monospace,monospace;font-size:12px}
-      .row{margin:6px 0;font-size:13px}
-      .haz{margin-top:10px;padding:8px;background:#fef3c7;border-radius:8px;font-size:12px}
-      @media print{button{display:none}}
-    </style></head><body>
-    <div class="card">
-      <h1>${(chemical.name || '').replace(/</g, '&lt;')}</h1>
-      <div class="row mono">CAS: ${chemical.cas_number || '—'}</div>
-      <div class="row">${chemical.molecular_formula || ''}</div>
-      <div class="row">Qty: ${chemical.quantity ?? '—'} ${chemical.unit || ''}</div>
-      <div class="row">Loc: ${(chemical.location || '—').replace(/</g, '&lt;')}</div>
-      <div class="row mono">ID: ${barcode}</div>
-      ${hazards ? `<div class="haz">Hazards: ${hazards}</div>` : ''}
-      <p class="mono" style="margin-top:12px;word-break:break-all">${barcode}</p>
-    </div>
-    <p style="margin-top:12px"><button onclick="window.print()">Print label</button></p>
-    </body></html>`)
-  w.document.close()
+  const barcode = chemical.barcode || chemical.container_code || `CHEM-${chemical.id}`
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Label — ${esc(chemical.name)}</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      margin: 0;
+      padding: 20px;
+      color: #0f172a;
+      background: #f8fafc;
+    }
+    .card {
+      border: 2px solid #0f172a;
+      border-radius: 12px;
+      padding: 16px 18px;
+      max-width: 360px;
+      margin: 0 auto;
+      background: #fff;
+    }
+    h1 { font-size: 18px; margin: 0 0 10px; line-height: 1.25; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    .row { margin: 6px 0; font-size: 13px; }
+    .label { color: #64748b; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .haz {
+      margin-top: 12px;
+      padding: 8px 10px;
+      background: #fef3c7;
+      border: 1px solid #f59e0b;
+      border-radius: 8px;
+      font-size: 12px;
+    }
+    .actions { text-align: center; margin-top: 16px; }
+    button {
+      font: inherit;
+      padding: 10px 18px;
+      border-radius: 10px;
+      border: 0;
+      background: #2563eb;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    @media print {
+      body { background: #fff; padding: 0; }
+      .actions { display: none; }
+      .card { border-radius: 0; max-width: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="label">Chemical label</div>
+    <h1>${esc(chemical.name)}</h1>
+    <div class="row mono"><span class="label">CAS</span><br/>${esc(chemical.cas_number || '—')}</div>
+    ${
+      chemical.molecular_formula
+        ? `<div class="row"><span class="label">Formula</span><br/>${esc(chemical.molecular_formula)}</div>`
+        : ''
+    }
+    <div class="row"><span class="label">Quantity</span><br/>${esc(chemical.quantity ?? '—')} ${esc(chemical.unit || '')}</div>
+    <div class="row"><span class="label">Location</span><br/>${esc(chemical.location || '—')}</div>
+    ${
+      chemical.expiry_date
+        ? `<div class="row"><span class="label">Expiry</span><br/>${esc(chemical.expiry_date)}</div>`
+        : ''
+    }
+    <div class="row mono"><span class="label">Container ID</span><br/>${esc(barcode)}</div>
+    ${hazards ? `<div class="haz"><strong>Hazards:</strong> ${esc(hazards)}</div>` : ''}
+  </div>
+  <div class="actions">
+    <button type="button" onclick="window.print()">Print label</button>
+  </div>
+</body>
+</html>`
+
+  // Blob URL avoids blank about:blank when noopener blocks document.write
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const w = window.open(url, '_blank', 'noopener,noreferrer,width=440,height=640')
+  if (!w) {
+    URL.revokeObjectURL(url)
+    // Popup blocked — open in same tab as last resort
+    const fallback = window.open()
+    if (fallback) {
+      fallback.document.open()
+      fallback.document.write(html)
+      fallback.document.close()
+    } else {
+      alert('Please allow pop-ups to print chemical labels.')
+    }
+    return
+  }
+  // Revoke after the new tab has loaded
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
 
 /* ========================================================================== */
