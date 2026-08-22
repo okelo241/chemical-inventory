@@ -1304,6 +1304,7 @@ def _send_invite_email_resend(
     org_name: str,
     invite_link: str,
     inviter_email: Optional[str] = None,
+    temp_password: Optional[str] = None,
 ) -> tuple:
     """
     Send invite email via Resend HTTP API.
@@ -1317,6 +1318,20 @@ def _send_invite_email_resend(
 
         subject = f"You're invited to join {org_name} on Chemical Inventory"
         inviter_line = f" from {inviter_email}" if inviter_email else ""
+        password_block = ""
+        if temp_password:
+            password_block = f"""
+          <div style="margin:20px 0;padding:14px 16px;background:#f1f5f9;border-radius:10px;border:1px solid #e2e8f0">
+            <p style="margin:0 0 8px;font-size:13px;color:#475569"><strong>Sign in with this email:</strong></p>
+            <p style="margin:0 0 6px;font-family:ui-monospace,monospace;font-size:14px">{to_email}</p>
+            <p style="margin:12px 0 8px;font-size:13px;color:#475569"><strong>Temporary password:</strong></p>
+            <p style="margin:0;font-family:ui-monospace,monospace;font-size:16px;font-weight:700;letter-spacing:0.04em">{temp_password}</p>
+            <p style="margin:12px 0 0;font-size:12px;color:#64748b;line-height:1.45">
+              After you sign in, open <em>Forgot password</em> (or account settings) to set your own password.
+              Keep this email private.
+            </p>
+          </div>
+            """
         html = f"""
         <div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#0f172a">
           <h2 style="margin:0 0 12px">Join {org_name}</h2>
@@ -1324,6 +1339,7 @@ def _send_invite_email_resend(
             You have been invited{inviter_line} to the <strong>{org_name}</strong>
             workspace on Chemical Inventory.
           </p>
+          {password_block}
           <p style="margin:24px 0">
             <a href="{invite_link}"
                style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;
@@ -1332,8 +1348,8 @@ def _send_invite_email_resend(
             </a>
           </p>
           <p style="font-size:13px;color:#64748b;line-height:1.5">
-            This link opens the login page for <strong>{org_name}</strong>.
-            Sign in with this email (or create an account), and you will join the organization automatically.
+            Open the link, sign in with the email and temporary password above,
+            and you will join <strong>{org_name}</strong> automatically.
           </p>
           <p style="font-size:12px;color:#94a3b8;word-break:break-all">{invite_link}</p>
         </div>
@@ -1574,13 +1590,57 @@ def invite_member(
             "invited_role": role,
         }
 
-        # 1) Prefer Resend (reliable production email)
+        # Create or update Auth user with a temporary password so they can sign in
+        temp_password = secrets.token_urlsafe(10)
+        auth_user_ready = False
+        if supabase is not None:
+            try:
+                supabase.auth.admin.create_user(
+                    {
+                        "email": email,
+                        "password": temp_password,
+                        "email_confirm": True,
+                        "user_metadata": meta,
+                    }
+                )
+                auth_user_ready = True
+            except Exception as e_create:
+                print("create_user (invite):", repr(e_create))
+                # User may already exist — try set a new temp password
+                try:
+                    listed = supabase.auth.admin.list_users()
+                    users = getattr(listed, "users", None) or listed or []
+                    existing = None
+                    for u in users:
+                        if str(getattr(u, "email", "") or "").lower() == email:
+                            existing = u
+                            break
+                    if existing and getattr(existing, "id", None):
+                        supabase.auth.admin.update_user_by_id(
+                            str(existing.id),
+                            {"password": temp_password, "email_confirm": True},
+                        )
+                        auth_user_ready = True
+                    else:
+                        # Fallback: invite email (no known password)
+                        try:
+                            supabase.auth.admin.invite_user_by_email(
+                                email,
+                                options={"redirect_to": invite_link, "data": meta},
+                            )
+                        except Exception as e_inv:
+                            print("invite_user_by_email:", repr(e_inv))
+                except Exception as e2:
+                    print("invite existing-user path:", repr(e2))
+
+        # Prefer Resend with temp password + link
         if RESEND_API_KEY:
             ok, err = _send_invite_email_resend(
                 to_email=email,
                 org_name=org_name,
                 invite_link=invite_link,
                 inviter_email=user.get("email"),
+                temp_password=temp_password if auth_user_ready else None,
             )
             if ok:
                 email_sent = True
@@ -1589,7 +1649,7 @@ def invite_member(
                 email_error = err
                 print("Resend invite email failed:", err)
 
-        # 2) Fallback: Supabase Auth invite email (needs SMTP configured in Supabase)
+        # Fallback: Supabase Auth invite email (no password in body)
         if not email_sent:
             ok, err = _supabase_send_invite_email(email, invite_link, meta)
             if ok:
@@ -1599,6 +1659,15 @@ def invite_member(
                 email_error = (
                     (email_error + " | " if email_error else "") + (err or "unknown")
                 )
+
+        invite_dict["auth_user_ready"] = auth_user_ready
+        if auth_user_ready and not email_sent:
+            # Still return password only in API for admin to share manually (dev fallback)
+            invite_dict["temp_password_dev"] = temp_password
+            invite_dict["email_error"] = (
+                (email_error or "")
+                + " | Set RESEND_API_KEY to email the temporary password automatically."
+            )
 
         invite_dict["email_sent"] = email_sent
         invite_dict["email_provider"] = email_provider

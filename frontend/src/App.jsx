@@ -1312,14 +1312,43 @@ function App() {
 
   useEffect(() => {
     let isMounted = true
+    // Password-reset links include type=recovery (hash or query)
+    let isRecoveryLink = false
+    try {
+      const hash = window.location.hash || ''
+      const search = window.location.search || ''
+      isRecoveryLink =
+        hash.includes('type=recovery') ||
+        search.includes('type=recovery') ||
+        sessionStorage.getItem('authRecovery') === '1'
+    } catch { /* ignore */ }
+
     supabase.auth.getSession().then(({ data: { session: nextSession } }) => {
-      if (isMounted) {
-        setSession(nextSession)
+      if (!isMounted) return
+      if (isRecoveryLink && nextSession) {
+        try {
+          sessionStorage.setItem('authRecovery', '1')
+        } catch { /* ignore */ }
+        setSession(null)
+        setShowLogin(true)
         setLoadingAuth(false)
+        return
       }
+      setSession(nextSession)
+      setLoadingAuth(false)
     })
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      if (isMounted) setSession(nextSession)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (!isMounted) return
+      // Supabase recovery link establishes a session — do NOT open inventory yet
+      if (event === 'PASSWORD_RECOVERY') {
+        try {
+          sessionStorage.setItem('authRecovery', '1')
+        } catch { /* ignore */ }
+        setSession(null) // keep user on Login until password is updated
+        setShowLogin(true)
+        return
+      }
+      setSession(nextSession)
     })
     return () => {
       isMounted = false
@@ -2303,7 +2332,7 @@ function App() {
     }
   }
 
-  // Load members & invites when in an organization workspace (admins need the roster)
+  // Load members, invites, and org-wide usage when in an organization workspace
   useEffect(() => {
     if (!session || workspaceMode !== 'organization' || !activeOrgId) {
       setOrgMembers([])
@@ -2312,7 +2341,8 @@ function App() {
     }
     fetchOrgMembers(activeOrgId)
     fetchOrgInvites(activeOrgId)
-  }, [session, workspaceMode, activeOrgId, fetchOrgMembers, fetchOrgInvites])
+    fetchTransactions()
+  }, [session, workspaceMode, activeOrgId, fetchOrgMembers, fetchOrgInvites, fetchTransactions])
 
   const switchToPersonal = () => {
 
@@ -2416,7 +2446,12 @@ function App() {
     try {
       const token = await getAccessToken()
       if (!token) return
-      const response = await fetch(`${API_URL}/transactions`, {
+      const params = new URLSearchParams()
+      if (workspaceMode === 'organization' && activeOrgId) {
+        params.set('organization_id', activeOrgId)
+      }
+      const qs = params.toString()
+      const response = await fetch(`${API_URL}/transactions${qs ? `?${qs}` : ''}`, {
         headers: { Authorization: `Bearer ${token}` },
       })
       if (response.status === 401) {
@@ -2428,11 +2463,68 @@ function App() {
         return
       }
       const data = await response.json()
-      setTransactions(Array.isArray(data) ? data : [])
+      const list = Array.isArray(data) ? data : []
+      setTransactions(list)
+
+      // Admins/owners: notify about other members' usage
+      if (
+        workspaceMode === 'organization' &&
+        activeOrgId &&
+        (activeOrgRole === 'owner' || activeOrgRole === 'admin')
+      ) {
+        const myId = session?.user?.id
+        const seenKey = `usageNotifSeen:${activeOrgId}`
+        let seen = {}
+        try {
+          seen = JSON.parse(localStorage.getItem(seenKey) || '{}') || {}
+        } catch {
+          seen = {}
+        }
+        const fresh = []
+        for (const t of list) {
+          if (!t?.id) continue
+          if (myId && String(t.user_id) === String(myId)) continue
+          if (seen[String(t.id)]) continue
+          const who = t.user_email || 'A member'
+          const absQty = Math.abs(Number(t.quantity_change) || 0)
+          const verb =
+            t.type === 'take' ? 'took' : t.type === 'return' ? 'returned' : 'adjusted'
+          const depleted =
+            t.type === 'take' &&
+            t.quantity_after !== undefined &&
+            t.quantity_after !== null &&
+            Number(t.quantity_after) <= 0
+          fresh.push({
+            id: `tx-${t.id}`,
+            type: depleted ? 'stock' : 'usage',
+            title: depleted ? 'Stock depleted' : 'Usage logged',
+            message: depleted
+              ? `${who} used the last of ${t.chemical_name} (${absQty} ${t.unit || ''})`.trim()
+              : `${who} ${verb} ${absQty} ${t.unit || ''} of ${t.chemical_name}`.trim(),
+            at: t.created_at || new Date().toISOString(),
+            createdAt: Date.now(),
+            read: false,
+          })
+          seen[String(t.id)] = true
+        }
+        if (fresh.length) {
+          try {
+            localStorage.setItem(seenKey, JSON.stringify(seen))
+          } catch { /* ignore */ }
+          setNotifications((prev) => [...fresh, ...(prev || [])].slice(0, 100))
+        }
+      }
     } catch (error) {
       console.warn('Could not load transactions:', error.message)
     }
-  }, [API_URL, getAccessToken])
+  }, [
+    API_URL,
+    getAccessToken,
+    workspaceMode,
+    activeOrgId,
+    activeOrgRole,
+    session?.user?.id,
+  ])
 
   useEffect(() => {
     if (session) {
@@ -2886,10 +2978,12 @@ function App() {
         unit: usageChem.unit,
         notes: usageForm.notes.trim() || null,
         user_email: session?.user?.email,
+        organization_id:
+          workspaceMode === 'organization' && activeOrgId ? activeOrgId : null,
       }
 
       try {
-        await fetch(`${API_URL}/transactions`, {
+        const txRes = await fetch(`${API_URL}/transactions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -2897,6 +2991,9 @@ function App() {
           },
           body: JSON.stringify(transactionPayload),
         })
+        if (!txRes.ok) {
+          console.warn('POST /transactions failed', txRes.status)
+        }
       } catch {
         // Transactions endpoint may be missing — still keep local history
       }
@@ -3610,10 +3707,22 @@ function App() {
 
     return (
       <Login
-        onLogin={setSession}
+        onLogin={(sess) => {
+          try {
+            sessionStorage.removeItem('authRecovery')
+          } catch { /* ignore */ }
+          setSession(sess)
+        }}
         inviteToken={inviteToken}
         inviteOrgName={inviteOrgName}
         inviteOrgSlug={inviteOrgSlug}
+        forceReset={(() => {
+          try {
+            return sessionStorage.getItem('authRecovery') === '1'
+          } catch {
+            return false
+          }
+        })()}
       />
     )
   }
