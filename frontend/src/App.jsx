@@ -2161,6 +2161,12 @@ function App() {
     setOrgLoading(true)
     try {
       const token = await getAccessToken()
+      if (!token) {
+        throw new Error('Not signed in. Please sign in again and retry.')
+      }
+      if (!API_URL) {
+        throw new Error('API URL is not configured (VITE_API_URL).')
+      }
       const res = await fetch(`${API_URL}/organizations`, {
         method: 'POST',
         headers: {
@@ -2169,14 +2175,38 @@ function App() {
         },
         body: JSON.stringify({ name }),
       })
-      if (!res.ok) throw new Error('Failed to create organization')
+      if (!res.ok) {
+        let detail = `Failed to create organization (${res.status})`
+        try {
+          const errBody = await res.json()
+          if (errBody?.detail) {
+            detail =
+              typeof errBody.detail === 'string'
+                ? errBody.detail
+                : JSON.stringify(errBody.detail)
+          }
+        } catch {
+          /* ignore parse errors */
+        }
+        throw new Error(detail)
+      }
       const org = await res.json()
-      await fetchOrganizations()
-      switchToOrganization(org)
+      const refreshed = await fetchOrganizations()
+      const list = Array.isArray(refreshed) ? refreshed : []
+      const matched =
+        list.find((o) => String(o.id) === String(org.id)) || org
+      switchToOrganization(matched)
+      setAccountMode('organization')
+      try {
+        localStorage.setItem('accountMode', 'organization')
+      } catch {
+        /* ignore */
+      }
       setShowCreateOrg(false)
       setNewOrgName('')
-      showMessage?.('success', `Organization “${org.name}” created`)
+      showMessage?.('success', `Organization “${org.name || name}” created`)
     } catch (err) {
+      console.error('Create organization error:', err)
       showMessage?.('error', err.message || 'Could not create organization')
     } finally {
       setOrgLoading(false)
@@ -2343,17 +2373,33 @@ function App() {
         })
 
         if (!createRes.ok) {
+          let detail = `Could not create organization automatically (${createRes.status})`
+          try {
+            const errBody = await createRes.json()
+            if (errBody?.detail) {
+              detail =
+                typeof errBody.detail === 'string'
+                  ? errBody.detail
+                  : JSON.stringify(errBody.detail)
+            }
+          } catch {
+            /* ignore */
+          }
+          console.warn('Auto-create org failed:', detail)
           setNewOrgName(orgName)
           setShowCreateOrg(true)
-          showMessage('error', 'Could not create organization automatically')
+          showMessage('error', detail)
           return
         }
 
         const org = await createRes.json()
-        setOrganizations([org])
+        setOrganizations((prev) => {
+          const exists = (prev || []).some((o) => String(o.id) === String(org.id))
+          return exists ? prev : [org, ...(prev || [])]
+        })
         switchToOrganization(org)
         setShowCreateOrg(false)
-        showMessage('success', `Organization “${org.name}” is ready`)
+        showMessage('success', `Organization “${org.name || orgName}” is ready`)
       } catch (err) {
         console.warn('Org setup failed', err)
       }

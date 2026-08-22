@@ -831,31 +831,45 @@ def create_organization(
     user: dict = Depends(get_current_user),
 ):
     user_id = user["id"]
+    name = (getattr(payload, "name", None) or "").strip()
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Organization name must be at least 2 characters")
+
     try:
-        base_slug = _slugify(payload.name)
+        base_slug = _slugify(name)
         slug = base_slug
         n = 1
         if hasattr(models.Organization, "slug"):
             while db.query(models.Organization).filter(models.Organization.slug == slug).first():
                 n += 1
                 slug = f"{base_slug}-{n}"
+                if n > 50:
+                    slug = f"{base_slug}-{secrets.token_hex(3)}"
+                    break
 
-        org_kwargs = {"name": payload.name.strip(), "created_by": str(user_id)}
-        if hasattr(models.Organization, "slug"):
+        org_cols = {c.name for c in models.Organization.__table__.columns}
+        org_kwargs = {"name": name}
+        if "created_by" in org_cols:
+            org_kwargs["created_by"] = str(user_id)
+        if "slug" in org_cols:
             org_kwargs["slug"] = slug
 
         org = models.Organization(**org_kwargs)
         db.add(org)
         db.flush()
-        db.add(
-            models.OrganizationMember(
-                organization_id=org.id,
-                user_id=str(user_id),
-                role="owner",
-            )
-        )
+
+        member_cols = {c.name for c in models.OrganizationMember.__table__.columns}
+        member_kwargs = {
+            "organization_id": org.id,
+            "user_id": str(user_id),
+            "role": "owner",
+        }
+        # Drop unknown columns (older schemas)
+        member_kwargs = {k: v for k, v in member_kwargs.items() if k in member_cols}
+        db.add(models.OrganizationMember(**member_kwargs))
         db.commit()
         db.refresh(org)
+
         write_audit(
             db,
             action="organization_create",
@@ -868,14 +882,85 @@ def create_organization(
             id=org.id,
             name=org.name,
             slug=getattr(org, "slug", None),
-            created_by=str(org.created_by) if org.created_by else None,
-            created_at=org.created_at,
+            created_by=str(org.created_by) if getattr(org, "created_by", None) else None,
+            created_at=getattr(org, "created_at", None),
             role="owner",
         )
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         print("POST /organizations error:", repr(e))
-        raise HTTPException(status_code=500, detail=f"Could not create organization: {e}")
+        # SQL fallback if ORM model columns drift from DB
+        try:
+            slug = _slugify(name)
+            row = db.execute(
+                text(
+                    """
+                    INSERT INTO organizations (name, slug, created_by)
+                    VALUES (:name, :slug, :created_by)
+                    RETURNING id, name, slug, created_by, created_at
+                    """
+                ),
+                {"name": name, "slug": slug, "created_by": str(user_id)},
+            ).mappings().first()
+            if not row:
+                # Try without slug
+                row = db.execute(
+                    text(
+                        """
+                        INSERT INTO organizations (name, created_by)
+                        VALUES (:name, :created_by)
+                        RETURNING id, name, created_by, created_at
+                        """
+                    ),
+                    {"name": name, "created_by": str(user_id)},
+                ).mappings().first()
+            if not row:
+                raise RuntimeError("INSERT organizations returned no row")
+
+            org_id = row["id"]
+            try:
+                db.execute(
+                    text(
+                        """
+                        INSERT INTO organization_members (organization_id, user_id, role)
+                        VALUES (:organization_id, :user_id, :role)
+                        """
+                    ),
+                    {
+                        "organization_id": str(org_id),
+                        "user_id": str(user_id),
+                        "role": "owner",
+                    },
+                )
+            except Exception as mem_err:
+                print("member insert fallback warning:", repr(mem_err))
+            db.commit()
+
+            write_audit(
+                db,
+                action="organization_create",
+                user_id=user_id,
+                user_email=user.get("email"),
+                organization_id=org_id,
+                detail={"name": name, "fallback": True},
+            )
+            return schemas.OrganizationOut(
+                id=org_id,
+                name=row.get("name") or name,
+                slug=row.get("slug"),
+                created_by=str(row["created_by"]) if row.get("created_by") else str(user_id),
+                created_at=row.get("created_at"),
+                role="owner",
+            )
+        except Exception as e2:
+            db.rollback()
+            print("POST /organizations SQL fallback failed:", repr(e2))
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not create organization: {e}; fallback: {e2}",
+            )
 
 
 @app.get("/organizations", response_model=List[schemas.OrganizationOut])
