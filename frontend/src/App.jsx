@@ -2129,6 +2129,44 @@ function App() {
     }
   }
 
+  const handleRemoveMember = async (memberUserId, memberLabel) => {
+    if (!activeOrgId || !memberUserId) return
+    if (!canInviteMembers) {
+      showMessage('error', 'Only owners and admins can remove members')
+      return
+    }
+    const who = memberLabel || memberUserId
+    if (
+      !window.confirm(
+        `Remove ${who} from this organization? They will lose access to the shared inventory.`
+      )
+    ) {
+      return
+    }
+    try {
+      const token = await getAccessToken()
+      const res = await fetch(
+        `${API_URL}/organizations/${activeOrgId}/members/${encodeURIComponent(memberUserId)}`,
+        {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      )
+      if (!res.ok) {
+        let detail = 'Could not remove member'
+        try {
+          const body = await res.json()
+          if (body?.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
+        } catch { /* ignore */ }
+        throw new Error(detail)
+      }
+      showMessage('success', `Removed ${who} from the organization`)
+      await fetchOrgMembers(activeOrgId)
+    } catch (err) {
+      showMessage('error', err.message || 'Could not remove member')
+    }
+  }
+
   const handleAcceptInvite = async (tokenValue) => {
     const clean = (tokenValue || '').trim()
     if (!clean) {
@@ -4658,30 +4696,65 @@ function App() {
                 ) : (
                   <div style={{ display: 'grid', gap: 8 }}>
                     {orgMembers.map((m) => {
-                      const label =
-                        m.email ||
-                        m.user_email ||
-                        m.full_name ||
-                        m.name ||
-                        m.user_id ||
-                        m.id ||
-                        'Member'
+                      const name = m.full_name || m.name || ''
+                      const email = m.email || m.user_email || ''
+                      const primary = name || email || 'Member'
+                      const secondary = name && email ? email : ''
+                      const uid = m.user_id || m.id
+                      const isSelf =
+                        uid &&
+                        session?.user?.id &&
+                        String(uid) === String(session.user.id)
                       return (
                         <div
-                          key={m.id || m.user_id || label}
+                          key={uid || primary}
                           style={{
                             display: 'flex',
                             justifyContent: 'space-between',
+                            alignItems: 'center',
                             padding: '8px 10px',
                             border: '1px solid var(--border)',
                             borderRadius: 10,
                             gap: 8,
                           }}
                         >
-                          <span style={{ fontSize: '0.9rem' }}>{label}</span>
-                          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                            {m.role || 'member'}
-                          </span>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{primary}</div>
+                            {secondary ? (
+                              <div
+                                style={{
+                                  fontSize: '0.8rem',
+                                  color: 'var(--text-muted)',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                }}
+                              >
+                                {secondary}
+                              </div>
+                            ) : null}
+                          </div>
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              flexShrink: 0,
+                            }}
+                          >
+                            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                              {m.role || 'member'}
+                            </span>
+                            {canInviteMembers && !isSelf && uid ? (
+                              <button
+                                type="button"
+                                className="btn-sm btn-danger"
+                                title="Remove from organization"
+                                onClick={() => handleRemoveMember(uid, primary)}
+                              >
+                                Remove
+                              </button>
+                            ) : null}
+                          </div>
                         </div>
                       )
                     })}

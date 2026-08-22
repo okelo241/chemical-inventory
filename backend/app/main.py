@@ -1049,6 +1049,30 @@ def list_my_organizations(
         return []
 
 
+def _resolve_auth_user_profile(uid: str) -> dict:
+    """Best-effort email / name from Supabase Auth admin API."""
+    out = {"email": None, "full_name": None}
+    if not uid or supabase is None:
+        return out
+    try:
+        resp = supabase.auth.admin.get_user_by_id(str(uid))
+        user = getattr(resp, "user", None) or resp
+        if not user:
+            return out
+        out["email"] = getattr(user, "email", None)
+        meta = getattr(user, "user_metadata", None) or {}
+        if isinstance(meta, dict):
+            out["full_name"] = (
+                meta.get("full_name")
+                or meta.get("name")
+                or meta.get("display_name")
+            )
+        return out
+    except Exception as e:
+        print("get_user_by_id failed:", uid, repr(e))
+        return out
+
+
 @app.get("/organizations/{organization_id}/members")
 def list_org_members(
     organization_id: str,
@@ -1074,18 +1098,18 @@ def list_org_members(
             ),
             {"organization_id": str(org_uuid)},
         ).mappings().all()
+        base = [dict(r) for r in rows]
     except Exception as e:
         print("list_org_members SQL error:", repr(e))
-        # ORM fallback without extra columns
         members = (
             db.query(models.OrganizationMember)
             .filter(models.OrganizationMember.organization_id == org_uuid)
             .all()
         )
-        return [
+        base = [
             {
-                "id": str(getattr(m, "id", "")) or None,
-                "organization_id": str(m.organization_id),
+                "id": getattr(m, "id", None),
+                "organization_id": m.organization_id,
                 "user_id": m.user_id,
                 "role": m.role,
                 "email": getattr(m, "email", None),
@@ -1093,17 +1117,91 @@ def list_org_members(
             for m in members
         ]
 
-    return [
-        {
-            "id": str(r["id"]) if r.get("id") is not None else None,
-            "organization_id": str(r["organization_id"]) if r.get("organization_id") is not None else str(org_uuid),
-            "user_id": r.get("user_id"),
-            "role": r.get("role") or "member",
-            "email": r.get("email"),
-            "lab_unit_id": str(r["lab_unit_id"]) if r.get("lab_unit_id") is not None else None,
-        }
-        for r in rows
-    ]
+    result = []
+    for r in base:
+        uid = r.get("user_id")
+        email = r.get("email")
+        full_name = None
+        if not email or not full_name:
+            profile = _resolve_auth_user_profile(str(uid) if uid else "")
+            email = email or profile.get("email")
+            full_name = profile.get("full_name")
+        result.append(
+            {
+                "id": str(r["id"]) if r.get("id") is not None else None,
+                "organization_id": str(r["organization_id"])
+                if r.get("organization_id") is not None
+                else str(org_uuid),
+                "user_id": str(uid) if uid is not None else None,
+                "role": r.get("role") or "member",
+                "email": email,
+                "full_name": full_name,
+                "lab_unit_id": str(r["lab_unit_id"]) if r.get("lab_unit_id") is not None else None,
+            }
+        )
+    return result
+
+
+@app.delete("/organizations/{organization_id}/members/{member_user_id}")
+def remove_org_member(
+    organization_id: str,
+    member_user_id: str,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """
+    Remove a member from the organization (owner/admin only).
+    Does not delete their Auth account — only org membership.
+    """
+    org_uuid = _parse_uuid(organization_id)
+    if org_uuid is None:
+        raise HTTPException(status_code=400, detail="Invalid organization_id")
+
+    actor_id = user["id"]
+    require_org_role(db, actor_id, org_uuid, {"owner", "admin"})
+
+    target = str(member_user_id).strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="member_user_id required")
+
+    if target == str(actor_id):
+        raise HTTPException(status_code=400, detail="You cannot remove yourself from the organization")
+
+    target_membership = get_membership(db, target, org_uuid)
+    if not target_membership:
+        raise HTTPException(status_code=404, detail="Member not found in this organization")
+
+    # Only an owner can remove another owner/admin; admins can remove members
+    actor_membership = get_membership(db, actor_id, org_uuid)
+    actor_role = (actor_membership.role if actor_membership else "").lower()
+    target_role = (target_membership.role or "member").lower()
+    if target_role in ("owner", "admin") and actor_role != "owner":
+        raise HTTPException(status_code=403, detail="Only an owner can remove admins/owners")
+
+    try:
+        db.execute(
+            text(
+                "DELETE FROM organization_members "
+                "WHERE organization_id = :organization_id AND user_id = :user_id"
+            ),
+            {"organization_id": str(org_uuid), "user_id": target},
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print("remove_org_member error:", repr(e))
+        raise HTTPException(status_code=500, detail=f"Could not remove member: {e}")
+
+    write_audit(
+        db,
+        action="member_remove",
+        user_id=actor_id,
+        user_email=user.get("email"),
+        organization_id=org_uuid,
+        detail={"removed_user_id": target, "removed_role": target_role},
+    )
+    return {"message": "Member removed", "user_id": target}
+
 
 
 @app.get("/workspace", response_model=schemas.WorkspaceContext)
