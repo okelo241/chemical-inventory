@@ -2332,7 +2332,7 @@ function App() {
     }
   }
 
-  // Load members, invites, and org-wide usage when in an organization workspace
+  // Load members & invites when in an organization workspace
   useEffect(() => {
     if (!session || workspaceMode !== 'organization' || !activeOrgId) {
       setOrgMembers([])
@@ -2341,8 +2341,7 @@ function App() {
     }
     fetchOrgMembers(activeOrgId)
     fetchOrgInvites(activeOrgId)
-    fetchTransactions()
-  }, [session, workspaceMode, activeOrgId, fetchOrgMembers, fetchOrgInvites, fetchTransactions])
+  }, [session, workspaceMode, activeOrgId, fetchOrgMembers, fetchOrgInvites])
 
   const switchToPersonal = () => {
 
@@ -2525,6 +2524,13 @@ function App() {
     activeOrgRole,
     session?.user?.id,
   ])
+
+  // Org-wide usage history + admin notifications (must be after fetchTransactions)
+  useEffect(() => {
+    if (!session || workspaceMode !== 'organization' || !activeOrgId) return
+    fetchTransactions()
+  }, [session, workspaceMode, activeOrgId, fetchTransactions])
+
 
   useEffect(() => {
     if (session) {
