@@ -92,6 +92,9 @@ if not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_KEY else None
 BUCKET_NAME = "sds-files"
+# Public app URL used in invite emails (no trailing slash)
+APP_ORIGIN = (os.getenv("APP_ORIGIN") or os.getenv("FRONTEND_URL") or "https://labchemicalinventory.com").rstrip("/")
+
 
 # Columns safe to set on Chemical from API payloads
 CHEMICAL_WRITE_FIELDS = {
@@ -1325,7 +1328,74 @@ def invite_member(
             organization_id=org_uuid,
             detail={"email": email, "role": role},
         )
-        return _invite_row_to_dict(row)
+
+        invite_dict = _invite_row_to_dict(row)
+        email_sent = False
+        email_error = None
+
+        # Resolve org name for branded link / email
+        org_name = "your organization"
+        try:
+            org_row = (
+                db.query(models.Organization)
+                .filter(models.Organization.id == org_uuid)
+                .first()
+            )
+            if org_row and getattr(org_row, "name", None):
+                org_name = org_row.name
+        except Exception as e:
+            print("org name lookup:", repr(e))
+
+        from urllib.parse import quote
+
+        invite_link = (
+            f"{APP_ORIGIN}/?token={quote(str(invite_dict.get('token') or token))}"
+            f"&org={quote(str(org_uuid))}"
+            f"&orgName={quote(org_name)}"
+        )
+        invite_dict["invite_link"] = invite_link
+
+        # Email invite via Supabase Auth (creates user if needed, sends magic/invite email)
+        if supabase is not None:
+            try:
+                supabase.auth.admin.invite_user_by_email(
+                    email,
+                    options={
+                        "redirect_to": invite_link,
+                        "data": {
+                            "invite_token": token,
+                            "organization_id": str(org_uuid),
+                            "organization_name": org_name,
+                            "invited_role": role,
+                        },
+                    },
+                )
+                email_sent = True
+            except Exception as e1:
+                print("invite_user_by_email failed:", repr(e1))
+                email_error = str(e1)
+                # Fallback: generate invite link (admin may copy; email may still need provider)
+                try:
+                    link_res = supabase.auth.admin.generate_link(
+                        {
+                            "type": "invite",
+                            "email": email,
+                            "options": {"redirect_to": invite_link},
+                        }
+                    )
+                    # Prefer app invite link for joining org; store generated if useful
+                    email_sent = False
+                    print("generate_link ok (manual email may be required)")
+                except Exception as e2:
+                    print("generate_link failed:", repr(e2))
+                    email_error = f"{e1}; {e2}"
+        else:
+            email_error = "Supabase admin client not configured"
+
+        invite_dict["email_sent"] = email_sent
+        if email_error and not email_sent:
+            invite_dict["email_error"] = email_error
+        return invite_dict
     except HTTPException:
         raise
     except Exception as e:

@@ -1182,15 +1182,53 @@ function App() {
   /* AUTH                                                                     */
   /* ======================================================================== */
 
-  // Invite links: open Login immediately (skip Landing)
+  // Invite links: always land on Login (org-branded), not inventory.
+  // If someone is already signed in, sign them out so the invitee can sign in.
   useEffect(() => {
+    let cancelled = false
     try {
       const params = new URLSearchParams(window.location.search)
-      if (params.get('token') || params.get('invite')) {
-        setShowLogin(true)
+      const inviteTok = params.get('token') || params.get('invite')
+      if (!inviteTok) return undefined
+
+      setShowLogin(true)
+      try {
+        localStorage.setItem('pendingInviteToken', inviteTok)
+        const orgName = params.get('orgName') || params.get('org_name') || ''
+        const org = params.get('org') || params.get('slug') || ''
+        if (orgName || org) {
+          localStorage.setItem(
+            'workspaceIntent',
+            JSON.stringify({
+              type: 'organization',
+              organizationName: orgName || org,
+              organizationSlug: org,
+              inviteToken: inviteTok,
+              at: Date.now(),
+            })
+          )
+        }
+      } catch {
+        /* ignore */
       }
+
+      ;(async () => {
+        try {
+          const { data } = await supabase.auth.getSession()
+          if (cancelled) return
+          if (data?.session) {
+            await supabase.auth.signOut()
+            if (!cancelled) setSession(null)
+          }
+        } catch (e) {
+          console.warn('Invite link sign-out:', e)
+        }
+      })()
     } catch {
       // ignore
+    }
+    return () => {
+      cancelled = true
     }
   }, [])
 
@@ -2033,6 +2071,7 @@ function App() {
       }
       const invite = await res.json()
       const inviteToken = invite.token
+      const inviteLink = invite.invite_link
       pushAudit('invite_create', {
         email,
         role: inviteRole || 'member',
@@ -2044,6 +2083,17 @@ function App() {
           slug: activeOrgId,
           id: activeOrgId,
         })
+      }
+      if (invite.email_sent) {
+        showMessage(
+          'success',
+          `Invite emailed to ${email}. Link also copied — they should open it to sign in and join ${activeOrgName || 'the organization'}.`
+        )
+      } else if (inviteToken || inviteLink) {
+        showMessage(
+          'success',
+          `Invite created for ${email}. Email may not have sent${invite.email_error ? ` (${invite.email_error})` : ''} — share the copied link manually.`
+        )
       } else {
         showMessage(
           'success',
@@ -3345,6 +3395,7 @@ function App() {
   const canEditChemicals = !isOrgMemberOnly
   const canDeleteChemicals = !isOrgMemberOnly
   const canInviteMembers = canManageOrg
+  const canCreateOrganization = !isOrgMemberOnly
   const canSeeDeleteAccount = !isOrgMemberOnly
   const canSeeAdminTools = canManageOrg
 
@@ -3511,28 +3562,32 @@ function App() {
                   >
                     <span>ℹ️</span> Hazard legend
                   </button>
-                  {accountMode === 'organization' && (
+                  {accountMode === 'organization' && (canCreateOrganization || canInviteMembers) && (
                     <>
                       <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="header-menu-item"
-                        style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
-                        onClick={() => {
-                          setShowCreateOrg(true)
-                          setHeaderMenuOpen(false)
-                        }}
-                      >
-                        <span>🏢</span> Create organization
-                      </button>
-                      {activeOrgId && (
+                      {canCreateOrganization && (
                         <button
                           type="button"
                           role="menuitem"
                           className="header-menu-item"
                           style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
                           onClick={() => {
+                            setShowCreateOrg(true)
+                            setHeaderMenuOpen(false)
+                          }}
+                        >
+                          <span>🏢</span> Create organization
+                        </button>
+                      )}
+                      {activeOrgId && canInviteMembers && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="header-menu-item"
+                          style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                          onClick={() => {
+                            fetchOrgMembers(activeOrgId)
+                            fetchOrgInvites(activeOrgId)
                             setShowInviteModal(true)
                             setHeaderMenuOpen(false)
                           }}
@@ -4403,7 +4458,7 @@ function App() {
             </div>
           )}
 
-          {showCreateOrg && (
+          {showCreateOrg && canCreateOrganization && (
             <div className="modal-overlay" onClick={() => setShowCreateOrg(false)}>
               <div className="modal" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
