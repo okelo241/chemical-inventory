@@ -50,7 +50,6 @@ app.add_middleware(
     max_age=86400,
 )
 
-
 class EnsureCORSHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         origin = request.headers.get("origin") or ""
@@ -1573,31 +1572,70 @@ def health(db: Session = Depends(get_db)):
 def delete_account(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
-    authorization: Optional[str] = Header(None),
 ):
     """
-    Best-effort account cleanup.
-    Deletes auth user via Supabase Admin API when SERVICE_KEY is set.
+    Permanently delete the authenticated user's Auth account.
+
+    Requires SUPABASE_SERVICE_KEY (service role) on the server.
+    Cleans org memberships / invites best-effort, then deletes auth.users
+    so the same email/password cannot sign in again.
     """
-    user_id = user["id"]
+    if not supabase:
+        raise HTTPException(
+            status_code=503,
+            detail="Supabase is not configured (set SUPABASE_SERVICE_KEY)",
+        )
+
+    user_id = str(user["id"])
+    email = user.get("email")
+
     write_audit(
         db,
         action="account_delete_requested",
         user_id=user_id,
-        user_email=user.get("email"),
+        user_email=email,
         detail={},
     )
-    deleted_auth = False
-    if supabase is not None:
-        try:
-            # Requires service role key
-            supabase.auth.admin.delete_user(user_id)
-            deleted_auth = True
-        except Exception as e:
-            print("Supabase admin delete_user failed:", e)
+
+    # --- Best-effort app data cleanup (does not block auth delete) ---
+    try:
+        if hasattr(models, "OrganizationMember"):
+            db.query(models.OrganizationMember).filter(
+                models.OrganizationMember.user_id == user_id
+            ).delete(synchronize_session=False)
+        if hasattr(models, "OrganizationInvite"):
+            # pending invites addressed to this email
+            if email:
+                db.query(models.OrganizationInvite).filter(
+                    models.OrganizationInvite.email == str(email).strip().lower(),
+                    models.OrganizationInvite.status == "pending",
+                ).delete(synchronize_session=False)
+        # Personal chemicals only (leave org inventory intact for the lab)
+        if hasattr(models, "Chemical"):
+            q = db.query(models.Chemical).filter(models.Chemical.user_id == user_id)
+            try:
+                q = q.filter(models.Chemical.organization_id.is_(None))
+            except Exception:
+                pass
+            q.delete(synchronize_session=False)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print("delete_account DB cleanup warning:", repr(e))
+
+    # --- Permanent Auth deletion (service role) ---
+    try:
+        supabase.auth.admin.delete_user(user_id)
+    except Exception as e:
+        print("Supabase admin delete_user failed:", repr(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete auth user. Ensure SUPABASE_SERVICE_KEY is the service_role secret. Error: {e}",
+        )
+
     return {
-        "message": "Account deletion processed",
-        "auth_deleted": deleted_auth,
+        "message": "Account permanently deleted",
+        "auth_deleted": True,
         "user_id": user_id,
     }
 

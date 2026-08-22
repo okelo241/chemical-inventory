@@ -1182,6 +1182,18 @@ function App() {
   /* AUTH                                                                     */
   /* ======================================================================== */
 
+  // Invite links: open Login immediately (skip Landing)
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('token') || params.get('invite')) {
+        setShowLogin(true)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
   useEffect(() => {
     let isMounted = true
     supabase.auth.getSession().then(({ data: { session: nextSession } }) => {
@@ -1289,6 +1301,19 @@ function App() {
       events.forEach((eventName) => window.removeEventListener(eventName, resetTimer))
     }
   }, [session]) // eslint-disable-line react-hooks/exhaustive-deps
+
+
+  // Org members land on Collection (not full admin inventory workflows)
+  useEffect(() => {
+    const role = String(activeOrgRole || '').toLowerCase()
+    if (
+      workspaceMode === 'organization' &&
+      role !== 'admin' &&
+      role !== 'owner'
+    ) {
+      setMainView((v) => (v === 'dashboard' ? 'collection' : v))
+    }
+  }, [workspaceMode, activeOrgRole])
 
   // Accept organization invite from URL token OR pendingInviteToken (from Login)
   useEffect(() => {
@@ -1652,9 +1677,20 @@ function App() {
       const res = await fetch(`${API_URL}/organizations/${organizationId}/members`, {
         headers: { Authorization: `Bearer ${token}` },
       })
-      if (!res.ok) return
+      if (!res.ok) {
+        console.warn('fetchOrgMembers status', res.status)
+        return
+      }
       const data = await res.json()
-      setOrgMembers(Array.isArray(data) ? data : [])
+      // Support array or { members: [...] } / { data: [...] }
+      const list = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.members)
+          ? data.members
+          : Array.isArray(data?.data)
+            ? data.data
+            : []
+      setOrgMembers(list)
     } catch (err) {
       console.warn('fetchOrgMembers error:', err)
     }
@@ -1670,9 +1706,19 @@ function App() {
       const res = await fetch(`${API_URL}/organizations/${organizationId}/invites`, {
         headers: { Authorization: `Bearer ${token}` },
       })
-      if (!res.ok) return
+      if (!res.ok) {
+        console.warn('fetchOrgInvites status', res.status)
+        return
+      }
       const data = await res.json()
-      setOrgInvites(Array.isArray(data) ? data : [])
+      const list = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.invites)
+          ? data.invites
+          : Array.isArray(data?.data)
+            ? data.data
+            : []
+      setOrgInvites(list)
     } catch (err) {
       console.warn('fetchOrgInvites error:', err)
     }
@@ -1732,12 +1778,18 @@ function App() {
     return row
   }, [session, activeOrgId, workspaceMode])
 
-  const copyInviteLink = async (inviteToken) => {
+  const copyInviteLink = async (inviteToken, orgMeta = {}) => {
     if (!inviteToken) {
       showMessage('error', 'No invite token available')
       return
     }
-    const link = `${window.location.origin}/?token=${encodeURIComponent(inviteToken)}`
+    const params = new URLSearchParams()
+    params.set('token', inviteToken)
+    const name = orgMeta.name || activeOrgName || ''
+    const slug = orgMeta.slug || orgMeta.id || activeOrgId || ''
+    if (name) params.set('orgName', name)
+    if (slug) params.set('org', String(slug))
+    const link = `${window.location.origin}/?${params.toString()}`
     setLastInviteLink(link)
     try {
       await navigator.clipboard.writeText(link)
@@ -1755,14 +1807,17 @@ function App() {
     setDeleteAccountLoading(true)
     try {
       const token = await getAccessToken()
-      // Prefer backend endpoint if present
+      let permanentlyDeleted = false
+      // Prefer backend endpoint if present (must call auth.admin.deleteUser server-side)
       if (API_URL && token) {
         try {
           const res = await fetch(`${API_URL}/account`, {
             method: 'DELETE',
             headers: { Authorization: `Bearer ${token}` },
           })
-          if (!res.ok && res.status !== 404) {
+          if (res.ok) {
+            permanentlyDeleted = true
+          } else if (res.status !== 404) {
             const err = await res.json().catch(() => ({}))
             console.warn('DELETE /account:', err)
           }
@@ -1778,6 +1833,8 @@ function App() {
         localStorage.removeItem(WASTE_STORAGE_KEY)
         localStorage.removeItem('workspaceIntent')
         localStorage.removeItem('accountMode')
+        localStorage.removeItem('workspace')
+        localStorage.removeItem('pendingInviteToken')
       } catch {
         /* ignore */
       }
@@ -1786,7 +1843,9 @@ function App() {
       setShowDeleteAccount(false)
       showMessage(
         'success',
-        'Signed out. If permanent server-side deletion is required, ensure DELETE /account is deployed or delete the user in Supabase Auth.'
+        permanentlyDeleted
+          ? 'Account permanently deleted. You can no longer sign in with this email.'
+          : 'Signed out and local data cleared. Permanent deletion requires a server DELETE /account that calls auth.admin.deleteUser — until then you can still sign in with the same credentials.'
       )
     } catch (err) {
       showMessage('error', err.message || 'Could not complete account deletion flow')
@@ -1969,7 +2028,11 @@ function App() {
         invite_id: invite.id,
       })
       if (inviteToken) {
-        await copyInviteLink(inviteToken)
+        await copyInviteLink(inviteToken, {
+          name: activeOrgName,
+          slug: activeOrgId,
+          id: activeOrgId,
+        })
       } else {
         showMessage(
           'success',
@@ -2063,7 +2126,19 @@ function App() {
     }
   }
 
+  // Load members & invites when in an organization workspace (admins need the roster)
+  useEffect(() => {
+    if (!session || workspaceMode !== 'organization' || !activeOrgId) {
+      setOrgMembers([])
+      setOrgInvites([])
+      return
+    }
+    fetchOrgMembers(activeOrgId)
+    fetchOrgInvites(activeOrgId)
+  }, [session, workspaceMode, activeOrgId, fetchOrgMembers, fetchOrgInvites])
+
   const switchToPersonal = () => {
+
     switchWorkspace({ mode: 'personal', organization_id: null })
   }
 
@@ -2631,6 +2706,33 @@ function App() {
             ? `Returned ${qty} ${usageChem.unit} of ${usageChem.name}`
             : `Adjusted ${usageChem.name} to ${newQuantity} ${usageChem.unit}`
       showMessage('success', successText)
+
+      // Org usage: audit + in-app notification (admins reviewing the org see these)
+      if (workspaceMode === 'organization' && activeOrgId) {
+        const who = session?.user?.email || 'A member'
+        pushAudit('usage_log', {
+          chemical_id: usageChem.id,
+          chemical_name: usageChem.name,
+          type: usageForm.type,
+          quantity: qty,
+          unit: usageChem.unit,
+          organization_id: activeOrgId,
+        })
+        setNotifications((prev) =>
+          [
+            {
+              id: `usage-${Date.now()}`,
+              type: 'usage',
+              title: 'Usage logged',
+              message: `${who} ${usageForm.type === 'take' ? 'took' : usageForm.type === 'return' ? 'returned' : 'adjusted'} ${qty} ${usageChem.unit} of ${usageChem.name}`,
+              createdAt: Date.now(),
+              read: false,
+            },
+            ...prev,
+          ].slice(0, MAX_NOTIFICATIONS)
+        )
+      }
+
       setShowUsageModal(false)
       setUsageChem(null)
       fetchChemicals(true)
@@ -2770,6 +2872,11 @@ function App() {
   const inviteToOrg = async (email, role = 'member') => {
     if (!activeOrgId) {
       showMessage('error', 'Switch to an organization workspace first')
+      return
+    }
+    const r = String(activeOrgRole || '').toLowerCase()
+    if (r !== 'admin' && r !== 'owner') {
+      showMessage('error', 'Only organization admins can invite members')
       return
     }
     try {
@@ -3127,6 +3234,13 @@ function App() {
         setCommandOpen((open) => !open)
       }
       if ((e.metaKey || e.ctrlKey) && e.key === 'n' && session) {
+        const role = String(activeOrgRole || '').toLowerCase()
+        if (
+          workspaceMode === 'organization' &&
+          role !== 'admin' &&
+          role !== 'owner'
+        )
+          return
         e.preventDefault()
         resetForm()
         setShowForm(true)
@@ -3171,9 +3285,49 @@ function App() {
     )
   }
 
+  /* Role helpers — org members are restricted; admins/owners have full control.
+     Personal workspace → full access. Org member → collection + usage only. */
+  const isOrgWorkspace =
+    workspaceMode === 'organization' && Boolean(activeOrgId)
+  const roleLower = String(activeOrgRole || '').toLowerCase()
+  // Anyone in an org who is not admin/owner is treated as a restricted member
+  const isOrgMemberOnly =
+    isOrgWorkspace && roleLower !== 'admin' && roleLower !== 'owner'
+  const canManageOrg = isOrgWorkspace
+    ? roleLower === 'admin' || roleLower === 'owner'
+    : true
+  const canAddChemicals = !isOrgMemberOnly
+  const canEditChemicals = !isOrgMemberOnly
+  const canDeleteChemicals = !isOrgMemberOnly
+  const canInviteMembers = canManageOrg
+  const canSeeDeleteAccount = !isOrgMemberOnly
+  const canSeeAdminTools = canManageOrg
+
   if (!session) {
-    if (!showLogin) return <Landing onGetStarted={() => setShowLogin(true)} />
-    return <Login onLogin={setSession} />
+    const params =
+      typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search)
+        : null
+    const inviteToken =
+      params?.get('token') || params?.get('invite') || null
+    const inviteOrgName =
+      params?.get('orgName') || params?.get('org_name') || null
+    const inviteOrgSlug =
+      params?.get('org') || params?.get('slug') || null
+
+    // Invite links skip Landing and open org-branded Login immediately
+    if (!showLogin && !inviteToken) {
+      return <Landing onGetStarted={() => setShowLogin(true)} />
+    }
+
+    return (
+      <Login
+        onLogin={setSession}
+        inviteToken={inviteToken}
+        inviteOrgName={inviteOrgName}
+        inviteOrgSlug={inviteOrgSlug}
+      />
+    )
   }
 
   if (showLanding) {
@@ -3407,6 +3561,7 @@ function App() {
                     <span>ℹ️</span> About
                   </button>
                   <div style={{ height: 1, background: 'var(--border)', margin: '4px 6px' }} />
+                  {canSeeDeleteAccount && (
                   <button
                     type="button"
                     role="menuitem"
@@ -3420,6 +3575,7 @@ function App() {
                   >
                     <span>⚠️</span> Delete account…
                   </button>
+                  )}
                 </div>
               )}
             </div>
@@ -3513,6 +3669,7 @@ function App() {
             Logout
           </button>
 
+          {canAddChemicals && (
           <button
             className="primary-btn"
             onClick={() => {
@@ -3522,6 +3679,7 @@ function App() {
           >
             + Add Chemical
           </button>
+        )}
         </div>
       </header>
 
@@ -4235,7 +4393,7 @@ function App() {
             </div>
           )}
 
-          {showInviteModal && (
+          {showInviteModal && canInviteMembers && (
             <div className="modal-overlay" onClick={() => setShowInviteModal(false)}>
               <div
                 className="modal"
@@ -4339,7 +4497,13 @@ function App() {
                               <button
                                 className="btn-sm"
                                 type="button"
-                                onClick={() => copyInviteLink(invite.token)}
+                                onClick={() =>
+                                  copyInviteLink(invite.token, {
+                                    name: activeOrgName,
+                                    slug: activeOrgId,
+                                    id: activeOrgId,
+                                  })
+                                }
                               >
                                 Copy link
                               </button>
@@ -4362,23 +4526,34 @@ function App() {
                   <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No members found</p>
                 ) : (
                   <div style={{ display: 'grid', gap: 8 }}>
-                    {orgMembers.map((m) => (
-                      <div
-                        key={m.id || m.user_id}
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          padding: '8px 10px',
-                          border: '1px solid var(--border)',
-                          borderRadius: 10,
-                        }}
-                      >
-                        <span style={{ fontSize: '0.9rem' }}>{m.user_id}</span>
-                        <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                          {m.role}
-                        </span>
-                      </div>
-                    ))}
+                    {orgMembers.map((m) => {
+                      const label =
+                        m.email ||
+                        m.user_email ||
+                        m.full_name ||
+                        m.name ||
+                        m.user_id ||
+                        m.id ||
+                        'Member'
+                      return (
+                        <div
+                          key={m.id || m.user_id || label}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            padding: '8px 10px',
+                            border: '1px solid var(--border)',
+                            borderRadius: 10,
+                            gap: 8,
+                          }}
+                        >
+                          <span style={{ fontSize: '0.9rem' }}>{label}</span>
+                          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            {m.role || 'member'}
+                          </span>
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
 
@@ -4437,7 +4612,8 @@ function App() {
                       ? 'Try adjusting your search or filters.'
                       : 'Get started by adding your first chemical.'}
                 </p>
-                {mainView !== 'collection' &&
+                {canAddChemicals &&
+                  mainView !== 'collection' &&
                   !search &&
                   filter === 'all' &&
                   !locationFilter &&
@@ -4626,20 +4802,24 @@ function App() {
                         >
                           {chem.in_collection ? 'Remove' : 'Collect'}
                         </button>
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-ghost"
-                          onClick={() => handleEdit(chem)}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="btn btn-sm btn-danger"
-                          onClick={() => handleDelete(chem.id, chem.name)}
-                        >
-                          Delete
-                        </button>
+                        {canEditChemicals && (
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-ghost"
+                            onClick={() => handleEdit(chem)}
+                          >
+                            Edit
+                          </button>
+                        )}
+                        {canDeleteChemicals && (
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-danger"
+                            onClick={() => handleDelete(chem.id, chem.name)}
+                          >
+                            Delete
+                          </button>
+                        )}
                       </div>
                     </article>
                   )
@@ -4791,28 +4971,32 @@ function App() {
                             <button className="btn-sm" onClick={() => openUsageModal(chem)}>
                               Log
                             </button>
-                            <button className="btn-sm" onClick={() => handleEdit(chem)}>
-                              Edit
-                            </button>
+                            {canEditChemicals && (
+                              <button className="btn-sm" onClick={() => handleEdit(chem)}>
+                                Edit
+                              </button>
+                            )}
                             <button className="btn-sm" type="button" onClick={() => printChemicalLabel(chem)}>
                               Label
                             </button>
-                            {showArchived || getChemMeta(chem.id).archived ? (
-                              <button
-                                className="btn-sm"
-                                type="button"
-                                onClick={() => handleUnarchiveChemical(chem)}
-                              >
-                                Restore
-                              </button>
-                            ) : (
-                              <button
-                                className="btn-sm"
-                                type="button"
-                                onClick={() => handleArchiveChemical(chem)}
-                              >
-                                Archive
-                              </button>
+                            {canEditChemicals && (
+                              showArchived || getChemMeta(chem.id).archived ? (
+                                <button
+                                  className="btn-sm"
+                                  type="button"
+                                  onClick={() => handleUnarchiveChemical(chem)}
+                                >
+                                  Restore
+                                </button>
+                              ) : (
+                                <button
+                                  className="btn-sm"
+                                  type="button"
+                                  onClick={() => handleArchiveChemical(chem)}
+                                >
+                                  Archive
+                                </button>
+                              )
                             )}
                             {chem.sds_filename && (
                               <button
@@ -4829,12 +5013,14 @@ function App() {
                             >
                               {chem.in_collection ? 'Remove' : 'Collect'}
                             </button>
-                            <button
-                              className="btn-sm btn-danger"
-                              onClick={() => handleDelete(chem.id, chem.name)}
-                            >
-                              Delete
-                            </button>
+                            {canDeleteChemicals && (
+                              <button
+                                className="btn-sm btn-danger"
+                                onClick={() => handleDelete(chem.id, chem.name)}
+                              >
+                                Delete
+                              </button>
+                            )}
                           </td>
                         </tr>
                       )
@@ -5129,15 +5315,17 @@ function App() {
               }}
             />
             <div className="command-list">
-              <button
-                onClick={() => {
-                  resetForm()
-                  setShowForm(true)
-                  setCommandOpen(false)
-                }}
-              >
-                <span>➕</span> Add new chemical
-              </button>
+              {canAddChemicals && (
+                <button
+                  onClick={() => {
+                    resetForm()
+                    setShowForm(true)
+                    setCommandOpen(false)
+                  }}
+                >
+                  <span>➕</span> Add new chemical
+                </button>
+              )}
               <button
                 onClick={() => {
                   startScanner()
@@ -5427,7 +5615,7 @@ function App() {
       )}
 
       {/* ===================== DELETE ACCOUNT ===================== */}
-      {showDeleteAccount && (
+      {showDeleteAccount && canSeeDeleteAccount && (
         <div className="modal-overlay" onClick={() => setShowDeleteAccount(false)}>
           <div className="modal" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
