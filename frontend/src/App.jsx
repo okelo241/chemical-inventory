@@ -3186,7 +3186,44 @@ function App() {
   }
   const toggleCollection = async (chem) => {
     const nextValue = !chem.in_collection
+    const userId = session?.user?.id
+    const isOrg = workspaceMode === 'organization' && activeOrgId
 
+    // Private per-user collection in org mode (never write shared in_collection)
+    if (isOrg && userId) {
+      const key = `myCollection:${userId}:${activeOrgId}`
+      let ids = []
+      try {
+        ids = JSON.parse(localStorage.getItem(key) || '[]') || []
+      } catch {
+        ids = []
+      }
+      const idStr = String(chem.id)
+      if (nextValue) {
+        if (!ids.map(String).includes(idStr)) ids.push(chem.id)
+      } else {
+        ids = ids.filter((x) => String(x) !== idStr)
+      }
+      try {
+        localStorage.setItem(key, JSON.stringify(ids))
+      } catch {
+        /* ignore */
+      }
+      setChemicals((prev) =>
+        prev.map((c) =>
+          c.id === chem.id ? { ...c, in_collection: nextValue } : c
+        )
+      )
+      showMessage(
+        'success',
+        nextValue
+          ? `Added “${chem.name}” to your private collection`
+          : `Removed “${chem.name}” from your private collection`
+      )
+      return
+    }
+
+    // Personal workspace: persist on chemical row
     setChemicals((prev) =>
       prev.map((c) =>
         c.id === chem.id ? { ...c, in_collection: nextValue } : c
@@ -3197,14 +3234,25 @@ function App() {
       const token = await getAccessToken()
       if (!token) throw new Error('No token')
 
-      const res = await fetch(`${API_URL}/chemicals/${chem.id}`, {
-        method: 'PUT',
+      // Prefer private UserCollection API when available
+      let res = await fetch(`${API_URL}/collections/toggle`, {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ in_collection: nextValue }),
+        body: JSON.stringify({ chemical_id: chem.id }),
       })
+      if (!res.ok) {
+        res = await fetch(`${API_URL}/chemicals/${chem.id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ in_collection: nextValue }),
+        })
+      }
 
       if (!res.ok) throw new Error('Update failed')
 
@@ -3299,6 +3347,34 @@ function App() {
     })
     return result
   }, [chemicals, search, filter, sortBy, locationFilter, hazardFilter, showArchived, activeLabUnit])
+
+
+  // Private collection flags for org workspace (local, per user — not shared)
+  useEffect(() => {
+    if (!session?.user?.id) return
+    if (workspaceMode !== 'organization' || !activeOrgId) return
+    const key = `myCollection:${session.user.id}:${activeOrgId}`
+    let ids = []
+    try {
+      ids = JSON.parse(localStorage.getItem(key) || '[]') || []
+    } catch {
+      ids = []
+    }
+    const setIds = new Set(ids.map(String))
+    setChemicals((prev) => {
+      if (!prev?.length) return prev
+      let changed = false
+      const next = prev.map((c) => {
+        const flag = setIds.has(String(c.id))
+        if (Boolean(c.in_collection) !== flag) {
+          changed = true
+          return { ...c, in_collection: flag }
+        }
+        return c
+      })
+      return changed ? next : prev
+    })
+  }, [session?.user?.id, workspaceMode, activeOrgId, chemicals.length])
 
   const displayedChemicals = useMemo(() => {
     if (mainView === 'collection') {

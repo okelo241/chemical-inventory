@@ -1984,15 +1984,25 @@ def get_transactions(
     db: Session = Depends(get_db),
     user_id: str = Depends(get_current_user_id),
 ):
+    """
+    Personal: only the caller's transactions.
+    Organization: all members' usage for that org (so admins see who used what).
+    """
     if not hasattr(models, "InventoryTransaction"):
         raise HTTPException(status_code=501, detail="Transactions table missing")
 
-    q = db.query(models.InventoryTransaction).filter(
-        models.InventoryTransaction.user_id == str(user_id)
-    )
     org_uuid = _parse_uuid(organization_id)
-    if org_uuid:
+    q = db.query(models.InventoryTransaction)
+
+    if org_uuid is not None:
+        if not get_membership(db, user_id, org_uuid):
+            raise HTTPException(status_code=403, detail="Not a member of this organization")
         q = q.filter(models.InventoryTransaction.organization_id == org_uuid)
+    else:
+        q = q.filter(
+            models.InventoryTransaction.user_id == str(user_id),
+            models.InventoryTransaction.organization_id.is_(None),
+        )
 
     rows = (
         q.order_by(models.InventoryTransaction.created_at.desc())
@@ -2029,10 +2039,14 @@ def create_transaction(
     if not hasattr(models, "InventoryTransaction"):
         raise HTTPException(status_code=501, detail="Transactions table missing")
 
+    org_uuid = _parse_uuid(payload.get("organization_id"))
+    if org_uuid is not None and not get_membership(db, user["id"], org_uuid):
+        raise HTTPException(status_code=403, detail="Not a member of this organization")
+
     row = models.InventoryTransaction(
         user_id=user["id"],
-        user_email=user.get("email"),
-        organization_id=_parse_uuid(payload.get("organization_id")),
+        user_email=user.get("email") or payload.get("user_email"),
+        organization_id=org_uuid,
         chemical_id=payload.get("chemical_id"),
         chemical_name=payload.get("chemical_name"),
         type=payload.get("type") or "take",
@@ -2045,9 +2059,30 @@ def create_transaction(
     db.add(row)
     db.commit()
     db.refresh(row)
+
+    write_audit(
+        db,
+        action="usage_log",
+        user_id=user["id"],
+        user_email=user.get("email"),
+        organization_id=org_uuid,
+        chemical_id=payload.get("chemical_id"),
+        chemical_name=payload.get("chemical_name"),
+        detail={
+            "type": payload.get("type") or "take",
+            "quantity_change": payload.get("quantity_change"),
+            "quantity_before": payload.get("quantity_before"),
+            "quantity_after": payload.get("quantity_after"),
+            "unit": payload.get("unit"),
+            "notes": payload.get("notes"),
+        },
+    )
+
     return {
         "id": str(row.id),
         "user_id": row.user_id,
+        "user_email": row.user_email,
+        "organization_id": str(row.organization_id) if row.organization_id else None,
         "chemical_id": row.chemical_id,
         "chemical_name": row.chemical_name,
         "type": row.type,
