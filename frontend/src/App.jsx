@@ -2269,7 +2269,7 @@ function App() {
           }
         }
 
-                if (type !== 'organization') {
+        if (type !== 'organization') {
           setAccountMode('personal')
           localStorage.setItem('accountMode', 'personal')
           switchWorkspace({ mode: 'personal', organization_id: null })
@@ -2294,7 +2294,7 @@ function App() {
         const orgs = (await fetchOrganizations()) || organizations || []
         const list = Array.isArray(orgs) ? orgs : []
 
-        // Match by organization name from Login (org login mode)
+        // Match by organization name/slug from Login (org login mode)
         if (orgName) {
           const needle = orgName.toLowerCase()
           const match = list.find((o) => {
@@ -2315,34 +2315,20 @@ function App() {
 
         // If user already belongs to orgs, open first
         if (list.length > 0) {
-          const first = list[0]
-          switchWorkspace({
-            mode: 'organization',
-            organization_id: first.id,
-            name: first.name,
-            role: first.role,
-          })
+          switchToOrganization(list[0])
           return
         }
 
-        // Owner creating a brand-new organization
-        if (orgName && orgName.length >= 2) {
-          setNewOrgName(orgName)
+        // No memberships yet — create org if Login provided a name, else open create modal
+        if (!orgName || orgName.length < 2) {
+          setNewOrgName(orgName || '')
           setShowCreateOrg(true)
           return
         }
 
         const token = await getAccessToken()
-        if (!token) return
-
-        const orgs = (await fetchOrganizations()) || []
-        if (Array.isArray(orgs) && orgs.length > 0) {
-          switchToOrganization(orgs[0])
-          return
-        }
-
-        if (!orgName || orgName.length < 2) {
-          setNewOrgName(orgName || '')
+        if (!token) {
+          setNewOrgName(orgName)
           setShowCreateOrg(true)
           return
         }
