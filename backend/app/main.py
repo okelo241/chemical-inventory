@@ -94,6 +94,9 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_KEY els
 BUCKET_NAME = "sds-files"
 # Public app URL used in invite emails (no trailing slash)
 APP_ORIGIN = (os.getenv("APP_ORIGIN") or os.getenv("FRONTEND_URL") or "https://labchemicalinventory.com").rstrip("/")
+# Optional: send invite emails via Resend (recommended — Supabase default mail is unreliable)
+RESEND_API_KEY = os.getenv("RESEND_API_KEY") or ""
+INVITE_FROM_EMAIL = os.getenv("INVITE_FROM_EMAIL") or "Chemical Inventory <onboarding@resend.dev>"
 
 
 # Columns safe to set on Chemical from API payloads
@@ -1196,6 +1199,116 @@ def list_lab_units(
     ]
 
 
+
+def _send_invite_email_resend(
+    *,
+    to_email: str,
+    org_name: str,
+    invite_link: str,
+    inviter_email: Optional[str] = None,
+) -> tuple:
+    """
+    Send invite email via Resend HTTP API.
+    Returns (ok: bool, error: Optional[str]).
+    """
+    if not RESEND_API_KEY:
+        return False, "RESEND_API_KEY not set"
+    try:
+        import urllib.request
+        import json as _json
+
+        subject = f"You're invited to join {org_name} on Chemical Inventory"
+        inviter_line = f" from {inviter_email}" if inviter_email else ""
+        html = f"""
+        <div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#0f172a">
+          <h2 style="margin:0 0 12px">Join {org_name}</h2>
+          <p style="line-height:1.5">
+            You have been invited{inviter_line} to the <strong>{org_name}</strong>
+            workspace on Chemical Inventory.
+          </p>
+          <p style="margin:24px 0">
+            <a href="{invite_link}"
+               style="display:inline-block;background:#2563eb;color:#fff;text-decoration:none;
+                      padding:12px 20px;border-radius:10px;font-weight:600">
+              Open invite &amp; sign in
+            </a>
+          </p>
+          <p style="font-size:13px;color:#64748b;line-height:1.5">
+            This link opens the login page for <strong>{org_name}</strong>.
+            Sign in with this email (or create an account), and you will join the organization automatically.
+          </p>
+          <p style="font-size:12px;color:#94a3b8;word-break:break-all">{invite_link}</p>
+        </div>
+        """
+        payload = _json.dumps(
+            {
+                "from": INVITE_FROM_EMAIL,
+                "to": [to_email],
+                "subject": subject,
+                "html": html,
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.resend.com/emails",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            if resp.status >= 200 and resp.status < 300:
+                return True, None
+            return False, f"Resend HTTP {resp.status}: {body}"
+    except Exception as e:
+        return False, str(e)
+
+
+def _supabase_send_invite_email(email: str, invite_link: str, meta: dict) -> tuple:
+    """
+    Try Supabase Auth admin invite / magic link.
+    Returns (ok: bool, error: Optional[str]).
+    """
+    if supabase is None:
+        return False, "Supabase client not configured (SUPABASE_SERVICE_KEY)"
+    errors = []
+    # 1) Official invite (creates user if new)
+    try:
+        supabase.auth.admin.invite_user_by_email(
+            email,
+            options={
+                "redirect_to": invite_link,
+                "data": meta or {},
+            },
+        )
+        return True, None
+    except Exception as e:
+        errors.append(f"invite_user_by_email: {e}")
+        print("invite_user_by_email:", repr(e))
+
+    # 2) User may already exist — magic link email
+    try:
+        supabase.auth.admin.generate_link(
+            {
+                "type": "magiclink",
+                "email": email,
+                "options": {"redirect_to": invite_link},
+            }
+        )
+        # generate_link does NOT always send email depending on SDK/version;
+        # try invite again is useless — mark as not sent for magiclink-only
+        errors.append(
+            "generate_link(magiclink) ran but does not guarantee email delivery; use Resend or Supabase SMTP"
+        )
+    except Exception as e:
+        errors.append(f"generate_link: {e}")
+        print("generate_link:", repr(e))
+
+    return False, " | ".join(errors)
+
+
 # ---------------------------------------------------------------------------
 # Invites  (SQL-first — avoids ORM selecting missing columns e.g. lab_unit_id)
 # ---------------------------------------------------------------------------
@@ -1332,6 +1445,7 @@ def invite_member(
         invite_dict = _invite_row_to_dict(row)
         email_sent = False
         email_error = None
+        email_provider = None
 
         # Resolve org name for branded link / email
         org_name = "your organization"
@@ -1355,46 +1469,48 @@ def invite_member(
         )
         invite_dict["invite_link"] = invite_link
 
-        # Email invite via Supabase Auth (creates user if needed, sends magic/invite email)
-        if supabase is not None:
-            try:
-                supabase.auth.admin.invite_user_by_email(
-                    email,
-                    options={
-                        "redirect_to": invite_link,
-                        "data": {
-                            "invite_token": token,
-                            "organization_id": str(org_uuid),
-                            "organization_name": org_name,
-                            "invited_role": role,
-                        },
-                    },
-                )
+        meta = {
+            "invite_token": token,
+            "organization_id": str(org_uuid),
+            "organization_name": org_name,
+            "invited_role": role,
+        }
+
+        # 1) Prefer Resend (reliable production email)
+        if RESEND_API_KEY:
+            ok, err = _send_invite_email_resend(
+                to_email=email,
+                org_name=org_name,
+                invite_link=invite_link,
+                inviter_email=user.get("email"),
+            )
+            if ok:
                 email_sent = True
-            except Exception as e1:
-                print("invite_user_by_email failed:", repr(e1))
-                email_error = str(e1)
-                # Fallback: generate invite link (admin may copy; email may still need provider)
-                try:
-                    link_res = supabase.auth.admin.generate_link(
-                        {
-                            "type": "invite",
-                            "email": email,
-                            "options": {"redirect_to": invite_link},
-                        }
-                    )
-                    # Prefer app invite link for joining org; store generated if useful
-                    email_sent = False
-                    print("generate_link ok (manual email may be required)")
-                except Exception as e2:
-                    print("generate_link failed:", repr(e2))
-                    email_error = f"{e1}; {e2}"
-        else:
-            email_error = "Supabase admin client not configured"
+                email_provider = "resend"
+            else:
+                email_error = err
+                print("Resend invite email failed:", err)
+
+        # 2) Fallback: Supabase Auth invite email (needs SMTP configured in Supabase)
+        if not email_sent:
+            ok, err = _supabase_send_invite_email(email, invite_link, meta)
+            if ok:
+                email_sent = True
+                email_provider = "supabase"
+            else:
+                email_error = (
+                    (email_error + " | " if email_error else "") + (err or "unknown")
+                )
 
         invite_dict["email_sent"] = email_sent
+        invite_dict["email_provider"] = email_provider
         if email_error and not email_sent:
             invite_dict["email_error"] = email_error
+            print(
+                "INVITE EMAIL NOT SENT. Set RESEND_API_KEY or configure "
+                "Supabase Auth → SMTP. Link still works if shared manually:",
+                invite_link,
+            )
         return invite_dict
     except HTTPException:
         raise

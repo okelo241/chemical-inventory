@@ -4497,16 +4497,47 @@ function App() {
             <div className="modal-overlay" onClick={() => setShowInviteModal(false)}>
               <div
                 className="modal"
-                style={{ maxWidth: 520 }}
+                style={{
+                  maxWidth: 520,
+                  width: 'min(520px, calc(100vw - 24px))',
+                  maxHeight: 'min(90vh, 720px)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden',
+                  padding: 0,
+                }}
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className="modal-header">
+                <div
+                  className="modal-header"
+                  style={{
+                    flexShrink: 0,
+                    padding: '16px 18px 12px',
+                    borderBottom: '1px solid var(--border)',
+                    position: 'sticky',
+                    top: 0,
+                    background: 'var(--panel, #fff)',
+                    zIndex: 2,
+                  }}
+                >
                   <h3>Invite Members</h3>
                   <button className="icon-btn" onClick={() => setShowInviteModal(false)}>
                     ✕
                   </button>
                 </div>
 
+                <div
+                  className="modal-body invite-modal-scroll"
+                  style={{
+                    flex: 1,
+                    minHeight: 0,
+                    overflowY: 'auto',
+                    overflowX: 'hidden',
+                    WebkitOverflowScrolling: 'touch',
+                    padding: '14px 18px 20px',
+                    overscrollBehavior: 'contain',
+                  }}
+                >
                 <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: 12 }}>
                   Organization: <strong>{activeOrgName || 'Current org'}</strong>
                 </p>
@@ -4684,6 +4715,7 @@ function App() {
                       Accept
                     </button>
                   </div>
+                </div>
                 </div>
               </div>
             </div>
