@@ -96,7 +96,7 @@ BUCKET_NAME = "sds-files"
 APP_ORIGIN = (os.getenv("APP_ORIGIN") or os.getenv("FRONTEND_URL") or "https://labchemicalinventory.com").rstrip("/")
 # Optional: send invite emails via Resend (recommended — Supabase default mail is unreliable)
 RESEND_API_KEY = os.getenv("RESEND_API_KEY") or ""
-INVITE_FROM_EMAIL = os.getenv("INVITE_FROM_EMAIL") or "Chemical Inventory <onboarding@resend.dev>"
+INVITE_FROM_EMAIL = os.getenv("INVITE_FROM_EMAIL") or "Chemical Inventory <invites@labchemicalinventory.com>"
 
 
 # Columns safe to set on Chemical from API payloads
@@ -1315,6 +1315,7 @@ def _send_invite_email_resend(
         return False, "RESEND_API_KEY not set"
     try:
         import urllib.request
+        import urllib.error
         import json as _json
 
         subject = f"You're invited to join {org_name} on Chemical Inventory"
@@ -1377,6 +1378,12 @@ def _send_invite_email_resend(
             if resp.status >= 200 and resp.status < 300:
                 return True, None
             return False, f"Resend HTTP {resp.status}: {body}"
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+        return False, f"HTTP Error {e.code}: {e.reason} {body}".strip()
     except Exception as e:
         return False, str(e)
 
