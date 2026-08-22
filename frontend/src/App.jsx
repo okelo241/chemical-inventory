@@ -4887,67 +4887,15 @@ function App() {
                   {lastInviteLink && (
                     <div
                       style={{
-                        padding: 12,
+                        padding: 10,
                         borderRadius: 10,
                         border: '1px solid var(--border)',
                         fontSize: '0.8rem',
                         wordBreak: 'break-all',
-                        background: 'var(--panel, #f8fafc)',
                       }}
                     >
-                      <div style={{ marginBottom: 8 }}>
-                        <strong>Share with invitee</strong>
-                        {lastInviteEmail ? (
-                          <div style={{ marginTop: 4 }}>
-                            Email: <code>{lastInviteEmail}</code>
-                          </div>
-                        ) : null}
-                      </div>
-                      <div>
-                        <strong>Link:</strong> {lastInviteLink}
-                      </div>
-                      {lastInvitePassword ? (
-                        <div
-                          style={{
-                            marginTop: 10,
-                            padding: 10,
-                            borderRadius: 8,
-                            background: '#fef3c7',
-                            border: '1px solid #f59e0b',
-                            wordBreak: 'break-all',
-                          }}
-                        >
-                          <strong>Temporary password</strong> (email did not send —
-                          share privately):
-                          <div
-                            style={{
-                              fontFamily: 'ui-monospace, monospace',
-                              fontSize: '1rem',
-                              fontWeight: 700,
-                              marginTop: 6,
-                              letterSpacing: '0.04em',
-                            }}
-                          >
-                            {lastInvitePassword}
-                          </div>
-                          <button
-                            type="button"
-                            className="btn-sm"
-                            style={{ marginTop: 8 }}
-                            onClick={() => {
-                              navigator.clipboard?.writeText(lastInvitePassword)
-                              showMessage('success', 'Password copied')
-                            }}
-                          >
-                            Copy password
-                          </button>
-                        </div>
-                      ) : (
-                        <p style={{ marginTop: 8, opacity: 0.75 }}>
-                          Sign-in details were included in the invite email.
-                        </p>
-                      )}
-                      <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <strong>Last link:</strong> {lastInviteLink}
+                      <div style={{ marginTop: 8 }}>
                         <button
                           type="button"
                           className="btn-sm"
@@ -4956,27 +4904,8 @@ function App() {
                             showMessage('success', 'Link copied again')
                           }}
                         >
-                          Copy link
+                          Copy again
                         </button>
-                        {lastInvitePassword ? (
-                          <button
-                            type="button"
-                            className="btn-sm"
-                            onClick={() => {
-                              const msg = [
-                                lastInviteEmail && `Email: ${lastInviteEmail}`,
-                                `Link: ${lastInviteLink}`,
-                                `Temporary password: ${lastInvitePassword}`,
-                              ]
-                                .filter(Boolean)
-                                .join('\n')
-                              navigator.clipboard?.writeText(msg)
-                              showMessage('success', 'All invite details copied')
-                            }}
-                          >
-                            Copy all details
-                          </button>
-                        ) : null}
                       </div>
                     </div>
                   )}
