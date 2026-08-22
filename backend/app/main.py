@@ -166,15 +166,16 @@ def _as_datetime_iso(value: Any) -> Optional[str]:
 
 
 def chemical_to_dict(r: Any) -> dict:
-    try:
-        if hasattr(schemas, "Chemical"):
-            return schemas.Chemical.model_validate(r).model_dump(mode="json")
-    except Exception as ve:
-        print("Chemical validation error id=", getattr(r, "id", None), ":", ve)
+    def _id_str(v: Any) -> Optional[str]:
+        if v is None or v == "":
+            return None
+        return str(v)
 
+    # Prefer manual mapping — avoids Pydantic UUID vs str mismatches on user_id etc.
     org_id = getattr(r, "organization_id", None)
     lab_id = getattr(r, "lab_unit_id", None)
     parent_id = getattr(r, "parent_chemical_id", None)
+    uid = getattr(r, "user_id", None)
     return {
         "id": int(getattr(r, "id", 0) or 0),
         "name": getattr(r, "name", None) or "",
@@ -196,17 +197,17 @@ def chemical_to_dict(r: Any) -> dict:
         "supplier": getattr(r, "supplier", None),
         "barcode": getattr(r, "barcode", None),
         "container_code": getattr(r, "container_code", None),
-        "parent_chemical_id": parent_id,
+        "parent_chemical_id": int(parent_id) if parent_id is not None else None,
         "sds_reviewed_at": _as_date_iso(getattr(r, "sds_reviewed_at", None)),
         "sds_review_months": getattr(r, "sds_review_months", None) or 12,
         "archived": bool(getattr(r, "archived", False)),
         "archived_at": _as_datetime_iso(getattr(r, "archived_at", None)),
-        "archived_by": getattr(r, "archived_by", None),
+        "archived_by": _id_str(getattr(r, "archived_by", None)),
         "in_collection": bool(getattr(r, "in_collection", False)),
-        "organization_id": str(org_id) if org_id is not None else None,
-        "lab_unit_id": str(lab_id) if lab_id is not None else None,
+        "organization_id": _id_str(org_id),
+        "lab_unit_id": _id_str(lab_id),
         "sds_filename": getattr(r, "sds_filename", None),
-        "user_id": getattr(r, "user_id", None),
+        "user_id": _id_str(uid),
         "created_at": _as_datetime_iso(getattr(r, "created_at", None)),
         "updated_at": _as_datetime_iso(getattr(r, "updated_at", None)),
     }
@@ -1590,7 +1591,7 @@ def invite_member(
             "invited_role": role,
         }
 
-        # Create or update Auth user with a temporary password so they can sign in
+        # Ensure Auth user exists with a known temporary password (new OR existing email)
         temp_password = secrets.token_urlsafe(10)
         auth_user_ready = False
         if supabase is not None:
@@ -1605,35 +1606,55 @@ def invite_member(
                 )
                 auth_user_ready = True
             except Exception as e_create:
+                err_s = str(e_create).lower()
                 print("create_user (invite):", repr(e_create))
-                # User may already exist — try set a new temp password
-                try:
-                    listed = supabase.auth.admin.list_users()
-                    users = getattr(listed, "users", None) or listed or []
-                    existing = None
-                    for u in users:
-                        if str(getattr(u, "email", "") or "").lower() == email:
-                            existing = u
-                            break
-                    if existing and getattr(existing, "id", None):
-                        supabase.auth.admin.update_user_by_id(
-                            str(existing.id),
-                            {"password": temp_password, "email_confirm": True},
-                        )
-                        auth_user_ready = True
-                    else:
-                        # Fallback: invite email (no known password)
+                already = (
+                    "already" in err_s
+                    or "registered" in err_s
+                    or "exists" in err_s
+                    or "duplicate" in err_s
+                )
+                if already:
+                    # Find user and rotate temp password so they can sign in
+                    try:
+                        existing_id = None
+                        # Prefer paginated list
                         try:
-                            supabase.auth.admin.invite_user_by_email(
-                                email,
-                                options={"redirect_to": invite_link, "data": meta},
+                            page = 1
+                            while page <= 10 and not existing_id:
+                                listed = supabase.auth.admin.list_users(page=page, per_page=200)
+                                users = getattr(listed, "users", None) or []
+                                if not users:
+                                    break
+                                for u in users:
+                                    if str(getattr(u, "email", "") or "").lower() == email:
+                                        existing_id = str(u.id)
+                                        break
+                                page += 1
+                        except TypeError:
+                            listed = supabase.auth.admin.list_users()
+                            users = getattr(listed, "users", None) or listed or []
+                            for u in users:
+                                if str(getattr(u, "email", "") or "").lower() == email:
+                                    existing_id = str(getattr(u, "id", ""))
+                                    break
+                        if existing_id:
+                            supabase.auth.admin.update_user_by_id(
+                                existing_id,
+                                {
+                                    "password": temp_password,
+                                    "email_confirm": True,
+                                    "user_metadata": meta,
+                                },
                             )
-                        except Exception as e_inv:
-                            print("invite_user_by_email:", repr(e_inv))
-                except Exception as e2:
-                    print("invite existing-user path:", repr(e2))
+                            auth_user_ready = True
+                        else:
+                            print("Could not find existing auth user for", email)
+                    except Exception as e2:
+                        print("update existing invite user failed:", repr(e2))
+                # Do NOT call invite_user_by_email here — fails when user already exists
 
-        # Prefer Resend with temp password + link
+        # Prefer Resend (works for new and existing users when we have temp_password)
         if RESEND_API_KEY:
             ok, err = _send_invite_email_resend(
                 to_email=email,
@@ -1648,9 +1669,10 @@ def invite_member(
             else:
                 email_error = err
                 print("Resend invite email failed:", err)
+                # Common: 403 = domain not verified / free-tier from restriction
 
-        # Fallback: Supabase Auth invite email (no password in body)
-        if not email_sent:
+        # Fallback Supabase invite only if user is brand new and Resend failed
+        if not email_sent and not auth_user_ready:
             ok, err = _supabase_send_invite_email(email, invite_link, meta)
             if ok:
                 email_sent = True
@@ -1661,12 +1683,13 @@ def invite_member(
                 )
 
         invite_dict["auth_user_ready"] = auth_user_ready
+        # Always expose invite link; temp password only when email failed so admin can share
         if auth_user_ready and not email_sent:
-            # Still return password only in API for admin to share manually (dev fallback)
             invite_dict["temp_password_dev"] = temp_password
             invite_dict["email_error"] = (
-                (email_error or "")
-                + " | Set RESEND_API_KEY to email the temporary password automatically."
+                (email_error or "Email not sent")
+                + " | Share the copied link. Temporary password (share privately): see temp_password_dev. "
+                "Resend 403 usually means verify your domain at resend.com or use onboarding@resend.dev only to your own email."
             )
 
         invite_dict["email_sent"] = email_sent

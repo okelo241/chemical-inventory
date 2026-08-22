@@ -2194,12 +2194,19 @@ function App() {
       if (invite.email_sent) {
         showMessage(
           'success',
-          `Invite emailed to ${email}. Link also copied — they should open it to sign in and join ${activeOrgName || 'the organization'}.`
+          `Invite emailed to ${email} with sign-in details. Link also copied.`
         )
       } else if (inviteToken || inviteLink) {
+        const temp = invite.temp_password_dev
+        const extra = temp
+          ? ` Temporary password (share privately): ${temp}`
+          : ''
         showMessage(
           'success',
-          `Invite created for ${email}. Email may not have sent${invite.email_error ? ` (${invite.email_error})` : ''} — share the copied link manually.`
+          `Invite created for ${email}. Share the copied link.${extra}` +
+            (invite.email_error
+              ? ` (Email note: ${String(invite.email_error).slice(0, 120)})`
+              : '')
         )
       } else {
         showMessage(
