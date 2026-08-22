@@ -405,7 +405,7 @@ class OrganizationSsoConfig(Base):
     provider = Column(String, nullable=True)
     domain = Column(String, nullable=True)
     enforce_sso = Column(Boolean, default=False)
-    metadata = Column(JSONB, nullable=True)
+    meta = Column(JSONB, nullable=True)
     updated_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),
