@@ -333,6 +333,41 @@ def _slugify(name: str) -> str:
     return s[:60] if s else "org"
 
 
+def _db_columns(db: Session, table: str) -> Set[str]:
+    """Actual Postgres columns for a public table (avoids ORM/DB drift)."""
+    try:
+        rows = db.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = :t"
+            ),
+            {"t": table},
+        ).fetchall()
+        return {str(r[0]) for r in rows}
+    except Exception as e:
+        print("_db_columns failed:", repr(e))
+        return set()
+
+
+def _invite_row_to_dict(row) -> dict:
+    if row is None:
+        return {}
+    data = dict(row) if hasattr(row, "keys") else dict(row)
+    return {
+        "id": str(data.get("id")) if data.get("id") is not None else None,
+        "organization_id": str(data["organization_id"]) if data.get("organization_id") is not None else None,
+        "email": data.get("email"),
+        "role": data.get("role") or "member",
+        "status": data.get("status") or "pending",
+        "token": data.get("token"),
+        "invited_by": data.get("invited_by"),
+        "lab_unit_id": str(data["lab_unit_id"]) if data.get("lab_unit_id") is not None else None,
+        "expires_at": _as_datetime_iso(data.get("expires_at")),
+        "created_at": _as_datetime_iso(data.get("created_at")),
+        "accepted_at": _as_datetime_iso(data.get("accepted_at")),
+    }
+
+
 def get_membership(
     db: Session, user_id: str, organization_id: Any
 ) -> Optional[models.OrganizationMember]:
@@ -1008,7 +1043,7 @@ def list_my_organizations(
         return []
 
 
-@app.get("/organizations/{organization_id}/members", response_model=List[schemas.OrganizationMemberOut])
+@app.get("/organizations/{organization_id}/members")
 def list_org_members(
     organization_id: str,
     db: Session = Depends(get_db),
@@ -1019,11 +1054,50 @@ def list_org_members(
         raise HTTPException(status_code=400, detail="Invalid organization_id")
     if not get_membership(db, user_id, org_uuid):
         raise HTTPException(status_code=403, detail="Not a member of this organization")
-    return (
-        db.query(models.OrganizationMember)
-        .filter(models.OrganizationMember.organization_id == org_uuid)
-        .all()
-    )
+
+    cols = _db_columns(db, "organization_members")
+    wanted = ["id", "organization_id", "user_id", "role", "lab_unit_id", "created_at", "email"]
+    select_cols = [c for c in wanted if not cols or c in cols]
+    if not select_cols:
+        select_cols = ["user_id", "role"]
+    try:
+        rows = db.execute(
+            text(
+                f"SELECT {', '.join(select_cols)} FROM organization_members "
+                "WHERE organization_id = :organization_id"
+            ),
+            {"organization_id": str(org_uuid)},
+        ).mappings().all()
+    except Exception as e:
+        print("list_org_members SQL error:", repr(e))
+        # ORM fallback without extra columns
+        members = (
+            db.query(models.OrganizationMember)
+            .filter(models.OrganizationMember.organization_id == org_uuid)
+            .all()
+        )
+        return [
+            {
+                "id": str(getattr(m, "id", "")) or None,
+                "organization_id": str(m.organization_id),
+                "user_id": m.user_id,
+                "role": m.role,
+                "email": getattr(m, "email", None),
+            }
+            for m in members
+        ]
+
+    return [
+        {
+            "id": str(r["id"]) if r.get("id") is not None else None,
+            "organization_id": str(r["organization_id"]) if r.get("organization_id") is not None else str(org_uuid),
+            "user_id": r.get("user_id"),
+            "role": r.get("role") or "member",
+            "email": r.get("email"),
+            "lab_unit_id": str(r["lab_unit_id"]) if r.get("lab_unit_id") is not None else None,
+        }
+        for r in rows
+    ]
 
 
 @app.get("/workspace", response_model=schemas.WorkspaceContext)
@@ -1120,10 +1194,13 @@ def list_lab_units(
 
 
 # ---------------------------------------------------------------------------
-# Invites
+# Invites  (SQL-first — avoids ORM selecting missing columns e.g. lab_unit_id)
 # ---------------------------------------------------------------------------
 
 def _invite_to_dict(invite) -> dict:
+    # ORM object or mapping
+    if hasattr(invite, "keys") and not hasattr(invite, "id"):
+        return _invite_row_to_dict(invite)
     return {
         "id": str(invite.id),
         "organization_id": str(invite.organization_id),
@@ -1137,6 +1214,26 @@ def _invite_to_dict(invite) -> dict:
         "created_at": _as_datetime_iso(getattr(invite, "created_at", None)),
         "accepted_at": _as_datetime_iso(getattr(invite, "accepted_at", None)),
     }
+
+
+def _sql_select_invites(db: Session, where_sql: str, params: dict):
+    """SELECT only columns that exist on organization_invites."""
+    cols = _db_columns(db, "organization_invites")
+    if not cols:
+        # fallback minimal set
+        cols = {
+            "id", "organization_id", "email", "role", "status", "token",
+            "invited_by", "created_at", "accepted_at",
+        }
+    wanted = [
+        "id", "organization_id", "email", "role", "status", "token",
+        "invited_by", "lab_unit_id", "expires_at", "created_at", "accepted_at",
+    ]
+    select_cols = [c for c in wanted if c in cols]
+    if "id" not in select_cols:
+        select_cols.insert(0, "id")
+    sql = f"SELECT {', '.join(select_cols)} FROM organization_invites WHERE {where_sql}"
+    return db.execute(text(sql), params).mappings().all()
 
 
 @app.post("/organizations/{organization_id}/invites")
@@ -1162,87 +1259,63 @@ def invite_member(
         if not email or "@" not in email:
             raise HTTPException(status_code=400, detail="Invalid email")
 
-        existing_invite = (
-            db.query(models.OrganizationInvite)
-            .filter(
-                models.OrganizationInvite.organization_id == org_uuid,
-                models.OrganizationInvite.email == email,
-                models.OrganizationInvite.status == "pending",
-            )
-            .first()
+        # Existing pending invite (SQL — no lab_unit_id required)
+        existing_rows = _sql_select_invites(
+            db,
+            "organization_id = :organization_id AND email = :email AND status = :status",
+            {
+                "organization_id": str(org_uuid),
+                "email": email,
+                "status": "pending",
+            },
         )
-        if existing_invite:
-            return _invite_to_dict(existing_invite)
+        if existing_rows:
+            return _invite_row_to_dict(existing_rows[0])
 
         token = secrets.token_urlsafe(32)
-        model_cols = {c.name for c in models.OrganizationInvite.__table__.columns}
-        kwargs = dict(
-            organization_id=org_uuid,
-            email=email,
-            role=role,
-            invited_by=str(user_id),
-            token=token,
-            status="pending",
-        )
+        cols = _db_columns(db, "organization_invites")
+        insert_cols = ["organization_id", "email", "role", "invited_by", "token", "status"]
+        insert_vals = {
+            "organization_id": str(org_uuid),
+            "email": email,
+            "role": role,
+            "invited_by": str(user_id),
+            "token": token,
+            "status": "pending",
+        }
+        if "expires_at" in cols:
+            insert_cols.append("expires_at")
+            insert_vals["expires_at"] = datetime.now(timezone.utc) + timedelta(days=14)
         lab_uuid = _parse_uuid(getattr(payload, "lab_unit_id", None))
-        if lab_uuid is not None and "lab_unit_id" in model_cols:
-            kwargs["lab_unit_id"] = lab_uuid
-        if "expires_at" in model_cols:
-            kwargs["expires_at"] = datetime.now(timezone.utc) + timedelta(days=14)
-        kwargs = {k: v for k, v in kwargs.items() if k in model_cols}
+        if lab_uuid is not None and "lab_unit_id" in cols:
+            insert_cols.append("lab_unit_id")
+            insert_vals["lab_unit_id"] = str(lab_uuid)
 
-        try:
-            invite = models.OrganizationInvite(**kwargs)
-            db.add(invite)
-            db.commit()
-            db.refresh(invite)
-        except Exception as orm_err:
-            db.rollback()
-            print("POST invite ORM insert failed, using SQL fallback:", repr(orm_err))
-            row = db.execute(
-                text(
-                    """
-                    INSERT INTO organization_invites
-                        (organization_id, email, role, invited_by, token, status)
-                    VALUES
-                        (:organization_id, :email, :role, :invited_by, :token, :status)
-                    RETURNING id, organization_id, email, role, status, token,
-                              invited_by, created_at, accepted_at
-                    """
-                ),
-                {
-                    "organization_id": str(org_uuid),
-                    "email": email,
-                    "role": role,
-                    "invited_by": str(user_id),
-                    "token": token,
-                    "status": "pending",
-                },
-            ).mappings().first()
-            db.commit()
-            if not row:
-                raise HTTPException(status_code=500, detail="Could not create invite")
-            write_audit(
-                db,
-                action="invite_create",
-                user_id=user_id,
-                user_email=user.get("email"),
-                organization_id=org_uuid,
-                detail={"email": email, "role": role},
-            )
-            return {
-                "id": str(row["id"]),
-                "organization_id": str(row["organization_id"]),
-                "email": row["email"],
-                "role": row["role"],
-                "status": row["status"],
-                "token": row["token"],
-                "invited_by": row["invited_by"],
-                "lab_unit_id": None,
-                "expires_at": None,
-                "created_at": _as_datetime_iso(row.get("created_at")),
-                "accepted_at": _as_datetime_iso(row.get("accepted_at")),
-            }
+        # Only columns that exist
+        insert_cols = [c for c in insert_cols if not cols or c in cols]
+        col_list = ", ".join(insert_cols)
+        param_list = ", ".join(f":{c}" for c in insert_cols)
+        returning = ", ".join(
+            c for c in [
+                "id", "organization_id", "email", "role", "status", "token",
+                "invited_by", "created_at", "accepted_at", "expires_at", "lab_unit_id",
+            ]
+            if not cols or c in cols
+        ) or "id, organization_id, email, role, status, token, invited_by"
+
+        row = db.execute(
+            text(
+                f"""
+                INSERT INTO organization_invites ({col_list})
+                VALUES ({param_list})
+                RETURNING {returning}
+                """
+            ),
+            insert_vals,
+        ).mappings().first()
+        db.commit()
+        if not row:
+            raise HTTPException(status_code=500, detail="Could not create invite")
 
         write_audit(
             db,
@@ -1252,7 +1325,7 @@ def invite_member(
             organization_id=org_uuid,
             detail={"email": email, "role": role},
         )
-        return _invite_to_dict(invite)
+        return _invite_row_to_dict(row)
     except HTTPException:
         raise
     except Exception as e:
@@ -1271,13 +1344,25 @@ def list_invites(
     if org_uuid is None:
         raise HTTPException(status_code=400, detail="Invalid organization_id")
     require_org_role(db, user_id, org_uuid, {"owner", "admin"})
-    rows = (
-        db.query(models.OrganizationInvite)
-        .filter(models.OrganizationInvite.organization_id == org_uuid)
-        .order_by(models.OrganizationInvite.created_at.desc())
-        .all()
-    )
-    return [_invite_to_dict(i) for i in rows]
+    try:
+        rows = _sql_select_invites(
+            db,
+            "organization_id = :organization_id ORDER BY created_at DESC NULLS LAST",
+            {"organization_id": str(org_uuid)},
+        )
+        return [_invite_row_to_dict(r) for r in rows]
+    except Exception as e:
+        print("list_invites error:", repr(e))
+        # last resort without order
+        try:
+            rows = _sql_select_invites(
+                db,
+                "organization_id = :organization_id",
+                {"organization_id": str(org_uuid)},
+            )
+            return [_invite_row_to_dict(r) for r in rows]
+        except Exception as e2:
+            raise HTTPException(status_code=500, detail=f"Could not list invites: {e2}")
 
 
 @app.post("/invites/accept", response_model=schemas.OrganizationOut)
@@ -1291,37 +1376,78 @@ def accept_invite(
     if not token:
         raise HTTPException(status_code=400, detail="token is required")
 
-    invite = (
-        db.query(models.OrganizationInvite)
-        .filter(
-            models.OrganizationInvite.token == token,
-            models.OrganizationInvite.status == "pending",
-        )
-        .first()
+    rows = _sql_select_invites(
+        db,
+        "token = :token AND status = :status",
+        {"token": token, "status": "pending"},
     )
-    if not invite:
+    if not rows:
         raise HTTPException(status_code=404, detail="Invite not found or already used")
+    inv = dict(rows[0])
 
-    if getattr(invite, "expires_at", None) and invite.expires_at < datetime.now(timezone.utc):
-        invite.status = "expired"
-        db.commit()
-        raise HTTPException(status_code=400, detail="Invite has expired")
+    expires_at = inv.get("expires_at")
+    if expires_at is not None:
+        try:
+            if isinstance(expires_at, str):
+                expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at < datetime.now(timezone.utc):
+                db.execute(
+                    text("UPDATE organization_invites SET status = 'expired' WHERE id = :id"),
+                    {"id": str(inv["id"])},
+                )
+                db.commit()
+                raise HTTPException(status_code=400, detail="Invite has expired")
+        except HTTPException:
+            raise
+        except Exception as e:
+            print("expires_at parse warning:", repr(e))
 
-    if not get_membership(db, user_id, invite.organization_id):
-        member_kwargs = dict(
-            organization_id=invite.organization_id,
-            user_id=str(user_id),
-            role=invite.role or "member",
+    org_id = inv["organization_id"]
+    invite_role = inv.get("role") or "member"
+    invite_email = inv.get("email")
+
+    if not get_membership(db, user_id, org_id):
+        member_cols = _db_columns(db, "organization_members") or {
+            "organization_id", "user_id", "role"
+        }
+        mcols = ["organization_id", "user_id", "role"]
+        mvals = {
+            "organization_id": str(org_id),
+            "user_id": str(user_id),
+            "role": invite_role,
+        }
+        if inv.get("lab_unit_id") and "lab_unit_id" in member_cols:
+            mcols.append("lab_unit_id")
+            mvals["lab_unit_id"] = str(inv["lab_unit_id"])
+        mcols = [c for c in mcols if c in member_cols]
+        db.execute(
+            text(
+                f"INSERT INTO organization_members ({', '.join(mcols)}) "
+                f"VALUES ({', '.join(':' + c for c in mcols)})"
+            ),
+            mvals,
         )
-        if getattr(invite, "lab_unit_id", None) and hasattr(models.OrganizationMember, "lab_unit_id"):
-            member_kwargs["lab_unit_id"] = invite.lab_unit_id
-        db.add(models.OrganizationMember(**member_kwargs))
 
-    invite.status = "accepted"
-    invite.accepted_at = datetime.now(timezone.utc)
+    # Mark invite accepted (only touch columns that exist)
+    inv_cols = _db_columns(db, "organization_invites")
+    if "accepted_at" in inv_cols:
+        db.execute(
+            text(
+                "UPDATE organization_invites SET status = 'accepted', accepted_at = :accepted_at "
+                "WHERE id = :id"
+            ),
+            {"id": str(inv["id"]), "accepted_at": datetime.now(timezone.utc)},
+        )
+    else:
+        db.execute(
+            text("UPDATE organization_invites SET status = 'accepted' WHERE id = :id"),
+            {"id": str(inv["id"])},
+        )
     db.commit()
 
-    org = db.query(models.Organization).filter(models.Organization.id == invite.organization_id).first()
+    org = db.query(models.Organization).filter(models.Organization.id == org_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
 
@@ -1332,7 +1458,7 @@ def accept_invite(
         user_id=user_id,
         user_email=user.get("email"),
         organization_id=org.id,
-        detail={"invite_email": invite.email},
+        detail={"invite_email": invite_email},
     )
     return schemas.OrganizationOut(
         id=org.id,
@@ -1340,7 +1466,7 @@ def accept_invite(
         slug=getattr(org, "slug", None),
         created_by=str(org.created_by) if org.created_by else None,
         created_at=org.created_at,
-        role=membership.role if membership else (invite.role or "member"),
+        role=membership.role if membership else invite_role,
     )
 
 
@@ -1356,17 +1482,17 @@ def revoke_invite(
     if org_uuid is None or invite_uuid is None:
         raise HTTPException(status_code=400, detail="Invalid id")
     require_org_role(db, user_id, org_uuid, {"owner", "admin"})
-    invite = (
-        db.query(models.OrganizationInvite)
-        .filter(
-            models.OrganizationInvite.id == invite_uuid,
-            models.OrganizationInvite.organization_id == org_uuid,
-        )
-        .first()
+    rows = _sql_select_invites(
+        db,
+        "id = :id AND organization_id = :organization_id",
+        {"id": str(invite_uuid), "organization_id": str(org_uuid)},
     )
-    if not invite:
+    if not rows:
         raise HTTPException(status_code=404, detail="Invite not found")
-    invite.status = "revoked"
+    db.execute(
+        text("UPDATE organization_invites SET status = 'revoked' WHERE id = :id"),
+        {"id": str(invite_uuid)},
+    )
     db.commit()
     return {"message": "Invite revoked"}
 
