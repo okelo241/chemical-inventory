@@ -32,25 +32,125 @@ function Landing({ onGetStarted }) {
   return (
     <div className="landing">
       {/* ===================== NAVBAR ===================== */}
-      <nav className="landing-nav">
+      <style>{`
+        .landing-nav {
+          position: sticky;
+          top: 0;
+          z-index: 1000;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px 20px;
+          flex-wrap: nowrap;
+          padding: 12px 20px;
+          background: rgba(255, 255, 255, 0.92);
+          backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
+          border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+          box-sizing: border-box;
+          width: 100%;
+        }
+        .landing-nav .nav-brand {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-shrink: 0;
+          min-width: 0;
+          text-decoration: none;
+          color: #0f172a;
+          font-weight: 700;
+          font-size: 1.05rem;
+          letter-spacing: -0.02em;
+          z-index: 2;
+        }
+        .landing-nav .nav-brand .app-logo-img {
+          width: 36px;
+          height: 36px;
+          border-radius: 10px;
+          object-fit: cover;
+          flex-shrink: 0;
+        }
+        .landing-nav .nav-brand span {
+          white-space: nowrap;
+        }
+        .landing-nav .nav-links {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-wrap: wrap;
+          gap: 4px 14px;
+          flex: 1 1 auto;
+          min-width: 0;
+          margin: 0;
+          padding: 0 8px;
+        }
+        .landing-nav .nav-links a {
+          color: #475569;
+          text-decoration: none;
+          font-size: 0.875rem;
+          font-weight: 500;
+          white-space: nowrap;
+          padding: 6px 4px;
+          border-radius: 6px;
+        }
+        .landing-nav .nav-links a:hover {
+          color: #0f172a;
+        }
+        .landing-nav .nav-actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-shrink: 0;
+          z-index: 2;
+        }
+        .landing-nav .nav-actions .btn {
+          white-space: nowrap;
+        }
+        @media (max-width: 1100px) {
+          .landing-nav {
+            flex-wrap: wrap;
+            row-gap: 10px;
+          }
+          .landing-nav .nav-links {
+            order: 3;
+            flex: 1 1 100%;
+            justify-content: flex-start;
+            padding: 4px 0 0;
+            border-top: 1px solid rgba(15, 23, 42, 0.06);
+            padding-top: 10px;
+          }
+        }
+        @media (max-width: 640px) {
+          .landing-nav .nav-links {
+            gap: 2px 10px;
+          }
+          .landing-nav .nav-links a {
+            font-size: 0.8rem;
+          }
+          .landing-nav .nav-brand span {
+            font-size: 0.95rem;
+          }
+        }
+      `}</style>
+      <nav className="landing-nav" aria-label="Main">
         <div className="nav-brand">
-          <img src={appLogo} alt="Chemical Inventory" className="app-logo-img" />
+          <img src={appLogo} alt="" className="app-logo-img" />
           <span>Chemical Inventory</span>
         </div>
         <div className="nav-links">
           <a href="#features">Features</a>
           <a href="#storage-guide">Storage Guide</a>
           <a href="#safety-measures">Safety Measures</a>
-          <a href="#ghs">GHS & Hazards</a>
+          <a href="#ghs">GHS &amp; Hazards</a>
           <a href="#emergency">Emergency</a>
           <a href="#why">Why It Matters</a>
           <a href="#faq">FAQ</a>
         </div>
         <div className="nav-actions">
-          <button className="btn btn-ghost" onClick={onGetStarted}>
+          <button type="button" className="btn btn-ghost" onClick={onGetStarted}>
             Log in
           </button>
-          <button className="btn btn-primary" onClick={onGetStarted}>
+          <button type="button" className="btn btn-primary" onClick={onGetStarted}>
             Get Started Free
           </button>
         </div>
