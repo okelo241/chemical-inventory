@@ -1209,6 +1209,8 @@ function App() {
   const [orgInvites, setOrgInvites] = useState([])
   const [orgMembers, setOrgMembers] = useState([])
   const [lastInviteLink, setLastInviteLink] = useState('')
+  const [lastInviteEmail, setLastInviteEmail] = useState('')
+  const [lastInvitePassword, setLastInvitePassword] = useState('')
 
   /* Phase A / competitive feature panels */
   const [showAuditLog, setShowAuditLog] = useState(false)
@@ -2190,22 +2192,29 @@ function App() {
           slug: activeOrgId,
           id: activeOrgId,
         })
+      } else if (inviteLink) {
+        setLastInviteLink(inviteLink)
+        try {
+          await navigator.clipboard?.writeText(inviteLink)
+        } catch { /* ignore */ }
       }
+
+      setLastInviteEmail(email)
+      setLastInvitePassword(
+        invite.email_sent ? '' : (invite.temp_password_dev || '')
+      )
+
       if (invite.email_sent) {
         showMessage(
           'success',
           `Invite emailed to ${email} with sign-in details. Link also copied.`
         )
       } else if (inviteToken || inviteLink) {
-        const temp = invite.temp_password_dev
-        const extra = temp
-          ? ` Temporary password (share privately): ${temp}`
-          : ''
         showMessage(
           'success',
-          `Invite created for ${email}. Share the copied link.${extra}` +
+          `Invite created for ${email}. Share the link and password shown below.` +
             (invite.email_error
-              ? ` (Email note: ${String(invite.email_error).slice(0, 120)})`
+              ? ` (Email: ${String(invite.email_error).slice(0, 80)})`
               : '')
         )
       } else {
@@ -4887,15 +4896,67 @@ function App() {
                   {lastInviteLink && (
                     <div
                       style={{
-                        padding: 10,
+                        padding: 12,
                         borderRadius: 10,
                         border: '1px solid var(--border)',
                         fontSize: '0.8rem',
                         wordBreak: 'break-all',
+                        background: 'var(--panel, #f8fafc)',
                       }}
                     >
-                      <strong>Last link:</strong> {lastInviteLink}
-                      <div style={{ marginTop: 8 }}>
+                      <div style={{ marginBottom: 8 }}>
+                        <strong>Share with invitee</strong>
+                        {lastInviteEmail ? (
+                          <div style={{ marginTop: 4 }}>
+                            Email: <code>{lastInviteEmail}</code>
+                          </div>
+                        ) : null}
+                      </div>
+                      <div>
+                        <strong>Link:</strong> {lastInviteLink}
+                      </div>
+                      {lastInvitePassword ? (
+                        <div
+                          style={{
+                            marginTop: 10,
+                            padding: 10,
+                            borderRadius: 8,
+                            background: '#fef3c7',
+                            border: '1px solid #f59e0b',
+                            wordBreak: 'break-all',
+                          }}
+                        >
+                          <strong>Temporary password</strong> (email did not send —
+                          share privately):
+                          <div
+                            style={{
+                              fontFamily: 'ui-monospace, monospace',
+                              fontSize: '1rem',
+                              fontWeight: 700,
+                              marginTop: 6,
+                              letterSpacing: '0.04em',
+                            }}
+                          >
+                            {lastInvitePassword}
+                          </div>
+                          <button
+                            type="button"
+                            className="btn-sm"
+                            style={{ marginTop: 8 }}
+                            onClick={() => {
+                              navigator.clipboard?.writeText(lastInvitePassword)
+                              showMessage('success', 'Password copied')
+                            }}
+                          >
+                            Copy password
+                          </button>
+                        </div>
+                      ) : (
+                        <p style={{ marginTop: 8, opacity: 0.75 }}>
+                          Sign-in details were included in the invite email.
+                        </p>
+                      )}
+                      <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <button
                           type="button"
                           className="btn-sm"
@@ -4904,8 +4965,27 @@ function App() {
                             showMessage('success', 'Link copied again')
                           }}
                         >
-                          Copy again
+                          Copy link
                         </button>
+                        {lastInvitePassword ? (
+                          <button
+                            type="button"
+                            className="btn-sm"
+                            onClick={() => {
+                              const msg = [
+                                lastInviteEmail && `Email: ${lastInviteEmail}`,
+                                `Link: ${lastInviteLink}`,
+                                `Temporary password: ${lastInvitePassword}`,
+                              ]
+                                .filter(Boolean)
+                                .join('\n')
+                              navigator.clipboard?.writeText(msg)
+                              showMessage('success', 'All invite details copied')
+                            }}
+                          >
+                            Copy all details
+                          </button>
+                        ) : null}
                       </div>
                     </div>
                   )}
