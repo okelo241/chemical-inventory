@@ -1204,6 +1204,7 @@ function App() {
   })
   const [showInviteModal, setShowInviteModal] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteFullName, setInviteFullName] = useState('')
   const [inviteRole, setInviteRole] = useState('member')
   const [inviteLoading, setInviteLoading] = useState(false)
   const [orgInvites, setOrgInvites] = useState([])
@@ -2148,6 +2149,11 @@ function App() {
       return
     }
     const email = inviteEmail.trim().toLowerCase()
+    const name = inviteFullName.trim()
+    if (!name || name.length < 2) {
+      showMessage('error', 'Enter the invitee full name')
+      return
+    }
     if (!email || !email.includes('@')) {
       showMessage('error', 'Enter a valid email')
       return
@@ -2165,6 +2171,7 @@ function App() {
         body: JSON.stringify({
           email,
           role: inviteRole || 'member',
+          full_name: inviteFullName.trim() || undefined,
         }),
       })
       if (!res.ok) {
@@ -2224,6 +2231,7 @@ function App() {
         )
       }
       setInviteEmail('')
+      setInviteFullName('')
       setInviteRole('member')
       await fetchOrgInvites(activeOrgId)
     } catch (err) {
@@ -4871,6 +4879,13 @@ function App() {
                 </p>
 
                 <div style={{ display: 'grid', gap: 10, marginBottom: 16 }}>
+                  <input
+                    className="search-input"
+                    placeholder="Full name (required)"
+                    value={inviteFullName}
+                    onChange={(e) => setInviteFullName(e.target.value)}
+                    autoComplete="name"
+                  />
                   <input
                     className="search-input"
                     placeholder="Email address"

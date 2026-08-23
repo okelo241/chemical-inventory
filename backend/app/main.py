@@ -1337,6 +1337,7 @@ def _send_invite_email_resend(
     invite_link: str,
     inviter_email: Optional[str] = None,
     temp_password: Optional[str] = None,
+    full_name: Optional[str] = None,
 ) -> tuple:
     """
     Send invite email via Resend HTTP API.
@@ -1383,11 +1384,13 @@ def _send_invite_email_resend(
             </p>
           </div>
             """
+        greeting = f"Hi {full_name}," if full_name else "Hello,"
         html = f"""
         <div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#0f172a">
           <h2 style="margin:0 0 12px">Join {org_name}</h2>
           <p style="line-height:1.5">
-            You have been invited{inviter_line} to the <strong>{org_name}</strong>
+            {greeting}
+            you have been invited{inviter_line} to the <strong>{org_name}</strong>
             workspace on Chemical Inventory.
           </p>
           {password_block}
@@ -1421,6 +1424,8 @@ def _send_invite_email_resend(
             headers={
                 "Authorization": f"Bearer {RESEND_API_KEY}",
                 "Content-Type": "application/json",
+                # Resend requires User-Agent — missing it returns 403 error code 1010
+                "User-Agent": "ChemicalInventory-API/1.0 (https://labchemicalinventory.com)",
             },
             method="POST",
         )
@@ -1562,6 +1567,18 @@ def invite_member(
         if not email or "@" not in email:
             raise HTTPException(status_code=400, detail="Invalid email")
 
+        # Optional display name for the invitee (Auth user_metadata)
+        full_name = ""
+        try:
+            if hasattr(payload, "full_name") and payload.full_name:
+                full_name = str(payload.full_name).strip()
+            elif hasattr(payload, "name") and payload.name:
+                full_name = str(payload.name).strip()
+            elif isinstance(payload, dict):
+                full_name = str(payload.get("full_name") or payload.get("name") or "").strip()
+        except Exception:
+            full_name = ""
+
         # Existing pending invite (SQL — no lab_unit_id required)
         existing_rows = _sql_select_invites(
             db,
@@ -1668,12 +1685,16 @@ def invite_member(
         auth_user_ready = False
         if supabase is not None:
             try:
+                user_meta = dict(meta or {})
+                if full_name:
+                    user_meta["full_name"] = full_name
+                    user_meta["name"] = full_name
                 supabase.auth.admin.create_user(
                     {
                         "email": email,
                         "password": temp_password,
                         "email_confirm": True,
-                        "user_metadata": meta,
+                        "user_metadata": user_meta,
                     }
                 )
                 auth_user_ready = True
@@ -1711,12 +1732,16 @@ def invite_member(
                                     existing_id = str(getattr(u, "id", ""))
                                     break
                         if existing_id:
+                            user_meta = dict(meta or {})
+                            if full_name:
+                                user_meta["full_name"] = full_name
+                                user_meta["name"] = full_name
                             supabase.auth.admin.update_user_by_id(
                                 existing_id,
                                 {
                                     "password": temp_password,
                                     "email_confirm": True,
-                                    "user_metadata": meta,
+                                    "user_metadata": user_meta,
                                 },
                             )
                             auth_user_ready = True
@@ -1734,6 +1759,7 @@ def invite_member(
                 invite_link=invite_link,
                 inviter_email=user.get("email"),
                 temp_password=temp_password if auth_user_ready else None,
+                full_name=full_name or None,
             )
             if ok:
                 email_sent = True
