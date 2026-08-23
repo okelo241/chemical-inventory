@@ -478,12 +478,30 @@ function Login({
       })
       if (otpError) throw otpError
     } else {
-      const {
+      let {
         data: { session: recSession },
       } = await supabase.auth.getSession()
       if (!recSession) {
+        // Try to recover session from URL hash (Supabase recovery links)
+        try {
+          const hash = typeof window !== 'undefined' ? window.location.hash || '' : ''
+          if (hash.includes('access_token')) {
+            const params = new URLSearchParams(hash.replace(/^#/, ''))
+            const access_token = params.get('access_token')
+            const refresh_token = params.get('refresh_token')
+            if (access_token && refresh_token) {
+              const { data: setData, error: setErr } =
+                await supabase.auth.setSession({ access_token, refresh_token })
+              if (!setErr) recSession = setData?.session
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      if (!recSession) {
         throw new Error(
-          'Reset link expired or already used. Request a new password reset email.'
+          'Reset link expired or already used. Sign in with your temporary password, open Profile, and set a new password there — or request a new reset email.'
         )
       }
     }

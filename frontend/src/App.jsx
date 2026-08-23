@@ -1221,6 +1221,21 @@ function App() {
   const [wasteLog, setWasteLog] = useState(() => loadJsonStorage(WASTE_STORAGE_KEY, []))
   const [wasteForm, setWasteForm] = useState({ chemical_id: '', quantity: '', unit: 'g', reason: '', notes: '' })
   const [showDeleteAccount, setShowDeleteAccount] = useState(false)
+  const [showProfileModal, setShowProfileModal] = useState(false)
+  const [profileName, setProfileName] = useState('')
+  const [profileAvatar, setProfileAvatar] = useState('')
+  const [profileNewPassword, setProfileNewPassword] = useState('')
+  const [profileConfirmPassword, setProfileConfirmPassword] = useState('')
+  const [profileSaving, setProfileSaving] = useState(false)
+  const [profileMsg, setProfileMsg] = useState(null)
+  const [profilePrefs, setProfilePrefs] = useState({
+    notifications_enabled: true,
+    notify_expiry: true,
+    notify_low_stock: true,
+    notify_usage: true,
+    theme: 'light',
+    default_workspace: 'last', // 'personal' | 'last' | org id
+  })
   const [deleteAccountConfirm, setDeleteAccountConfirm] = useState('')
   const [deleteAccountLoading, setDeleteAccountLoading] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
@@ -1254,6 +1269,20 @@ function App() {
   const toggleTheme = useCallback(() => {
     setTheme((previous) => (previous === 'light' ? 'dark' : 'light'))
   }, [])
+
+  // Apply theme / notification prefs stored on the user account
+  useEffect(() => {
+    if (!session?.user) return
+    const meta = session.user.user_metadata || {}
+    if (typeof applyUserPreferences === 'function') {
+      applyUserPreferences(meta)
+    } else {
+      if (meta.theme === 'dark' || meta.theme === 'light') setTheme(meta.theme)
+      if (meta.notifications_enabled !== undefined) {
+        setNotificationsEnabled(Boolean(meta.notifications_enabled))
+      }
+    }
+  }, [session?.user?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     localStorage.setItem('viewMode', viewMode)
@@ -1364,6 +1393,231 @@ function App() {
     setMessage({ type, text, id: Date.now() })
     toastTimeout.current = setTimeout(() => setMessage(null), 4500)
   }, [])
+
+
+
+  const openProfileModal = () => {
+    const meta = session?.user?.user_metadata || {}
+    setProfileName(
+      meta.full_name || meta.name || session?.user?.email?.split('@')[0] || ''
+    )
+    setProfileAvatar(meta.avatar_url || meta.picture || '')
+    setProfileNewPassword('')
+    setProfileConfirmPassword('')
+    setProfileMsg(null)
+    setProfilePrefs({
+      notifications_enabled:
+        meta.notifications_enabled !== undefined
+          ? Boolean(meta.notifications_enabled)
+          : localStorage.getItem('notificationsEnabled') !== 'false',
+      notify_expiry: meta.notify_expiry !== false,
+      notify_low_stock: meta.notify_low_stock !== false,
+      notify_usage: meta.notify_usage !== false,
+      theme: meta.theme === 'dark' || meta.theme === 'light' ? meta.theme : theme,
+      default_workspace:
+        meta.default_workspace ||
+        localStorage.getItem('defaultWorkspace') ||
+        'last',
+    })
+    setShowProfileModal(true)
+    fetchOrganizations()
+  }
+
+  const resizeImageFile = (file, maxSize = 128) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const img = new Image()
+        img.onload = () => {
+          const canvas = document.createElement('canvas')
+          const scale = Math.min(maxSize / img.width, maxSize / img.height, 1)
+          canvas.width = Math.max(1, Math.round(img.width * scale))
+          canvas.height = Math.max(1, Math.round(img.height * scale))
+          const ctx = canvas.getContext('2d')
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+          resolve(canvas.toDataURL('image/jpeg', 0.85))
+        }
+        img.onerror = () => reject(new Error('Could not read image'))
+        img.src = reader.result
+      }
+      reader.onerror = () => reject(new Error('Could not read file'))
+      reader.readAsDataURL(file)
+    })
+
+  const handleProfileAvatarChange = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      setProfileMsg({ type: 'error', text: 'Please choose an image file' })
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setProfileMsg({ type: 'error', text: 'Image must be under 5 MB' })
+      return
+    }
+    try {
+      const dataUrl = await resizeImageFile(file, 128)
+      setProfileAvatar(dataUrl)
+      setProfileMsg({ type: 'success', text: 'Photo ready — click Save profile' })
+    } catch (err) {
+      setProfileMsg({ type: 'error', text: err.message || 'Could not process image' })
+    }
+  }
+
+  const applyUserPreferences = (meta = {}) => {
+    if (meta.theme === 'dark' || meta.theme === 'light') {
+      setTheme(meta.theme)
+      try {
+        localStorage.setItem('theme', meta.theme)
+      } catch { /* ignore */ }
+    }
+    if (meta.notifications_enabled !== undefined) {
+      const on = Boolean(meta.notifications_enabled)
+      setNotificationsEnabled(on)
+      try {
+        localStorage.setItem('notificationsEnabled', String(on))
+      } catch { /* ignore */ }
+    }
+    if (meta.default_workspace) {
+      try {
+        localStorage.setItem('defaultWorkspace', String(meta.default_workspace))
+      } catch { /* ignore */ }
+    }
+  }
+
+  const handleSaveProfile = async (e) => {
+    e?.preventDefault?.()
+    if (!session?.user) return
+    setProfileSaving(true)
+    setProfileMsg(null)
+    try {
+      const name = profileName.trim()
+      if (name && name.length < 2) {
+        throw new Error('Name must be at least 2 characters')
+      }
+      const prefs = { ...profilePrefs }
+      const { data, error } = await supabase.auth.updateUser({
+        data: {
+          full_name: name || undefined,
+          name: name || undefined,
+          avatar_url: profileAvatar || undefined,
+          theme: prefs.theme,
+          notifications_enabled: prefs.notifications_enabled,
+          notify_expiry: prefs.notify_expiry,
+          notify_low_stock: prefs.notify_low_stock,
+          notify_usage: prefs.notify_usage,
+          default_workspace: prefs.default_workspace,
+        },
+      })
+      if (error) throw error
+
+      applyUserPreferences({
+        theme: prefs.theme,
+        notifications_enabled: prefs.notifications_enabled,
+        default_workspace: prefs.default_workspace,
+      })
+
+      if (data?.user) {
+        setSession((prev) =>
+          prev
+            ? {
+                ...prev,
+                user: {
+                  ...prev.user,
+                  ...data.user,
+                  user_metadata: {
+                    ...(prev.user?.user_metadata || {}),
+                    ...(data.user.user_metadata || {}),
+                  },
+                },
+              }
+            : prev
+        )
+      }
+      setProfileMsg({ type: 'success', text: 'Profile & preferences saved' })
+      showMessage('success', 'Profile updated')
+    } catch (err) {
+      setProfileMsg({ type: 'error', text: err.message || 'Could not update profile' })
+    } finally {
+      setProfileSaving(false)
+    }
+  }
+
+  const handleChangePassword = async (e) => {
+    e?.preventDefault?.()
+    if (!session?.user) return
+    if (!profileNewPassword || profileNewPassword.length < 6) {
+      setProfileMsg({ type: 'error', text: 'New password must be at least 6 characters' })
+      return
+    }
+    if (profileNewPassword !== profileConfirmPassword) {
+      setProfileMsg({ type: 'error', text: 'Passwords do not match' })
+      return
+    }
+    setProfileSaving(true)
+    setProfileMsg(null)
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: profileNewPassword,
+      })
+      if (error) throw error
+      setProfileNewPassword('')
+      setProfileConfirmPassword('')
+      setProfileMsg({
+        type: 'success',
+        text: 'Password changed. Use the new password next time you sign in.',
+      })
+      showMessage('success', 'Password changed successfully')
+    } catch (err) {
+      setProfileMsg({
+        type: 'error',
+        text:
+          err.message ||
+          'Could not change password. If you signed in with a temporary invite password, try again or use Forgot password on the login screen.',
+      })
+    } finally {
+      setProfileSaving(false)
+    }
+  }
+
+  const handleSignOutAllDevices = async () => {
+    if (
+      !window.confirm(
+        'Sign out of this browser and all other devices? You will need to sign in again everywhere.'
+      )
+    ) {
+      return
+    }
+    setProfileSaving(true)
+    setProfileMsg(null)
+    try {
+      // Global scope invalidates refresh tokens on other devices (Supabase Auth)
+      const { error } = await supabase.auth.signOut({ scope: 'global' })
+      if (error) throw error
+      setShowProfileModal(false)
+      setSession(null)
+      setChemicals([])
+      setTransactions([])
+      setOrganizations([])
+      setActiveOrgId(null)
+      showMessage('success', 'Signed out of all devices')
+    } catch (err) {
+      // Fallback: local sign-out if global is not supported
+      try {
+        await supabase.auth.signOut()
+        setSession(null)
+        setShowProfileModal(false)
+        showMessage('success', 'Signed out on this device')
+      } catch (e2) {
+        setProfileMsg({
+          type: 'error',
+          text: err.message || e2.message || 'Could not sign out',
+        })
+      }
+    } finally {
+      setProfileSaving(false)
+    }
+  }
 
   const handleLogout = async () => {
     try {
@@ -2464,6 +2718,19 @@ function App() {
       return []
     }
   }, [API_URL, getAccessToken])
+
+
+  // After orgs load, open default organization workspace if preferred
+  useEffect(() => {
+    if (!session?.user?.id) return
+    const meta = session.user.user_metadata || {}
+    const def =
+      meta.default_workspace || localStorage.getItem('defaultWorkspace') || 'last'
+    if (def === 'personal' || def === 'last' || !def) return
+    if (workspaceMode === 'organization' && String(activeOrgId) === String(def)) return
+    const match = (organizations || []).find((o) => String(o.id) === String(def))
+    if (match) switchToOrganization(match)
+  }, [session?.user?.id, organizations]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchTransactions = useCallback(async () => {
     try {
@@ -3948,6 +4215,18 @@ function App() {
                     className="header-menu-item"
                     style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
                     onClick={() => {
+                      setHeaderMenuOpen(false)
+                      openProfileModal()
+                    }}
+                  >
+                    <span>👤</span> Profile &amp; password
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    onClick={() => {
                       setShowSdsReport(true)
                       setHeaderMenuOpen(false)
                     }}
@@ -4092,9 +4371,75 @@ function App() {
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>
 
-          <div className="user-pill" title={session.user?.email}>
-            {session.user?.email}
-          </div>
+          <button
+            type="button"
+            className="user-pill"
+            onClick={openProfileModal}
+            title="Open profile"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              cursor: 'pointer',
+              border: '1px solid var(--border, #e2e8f0)',
+              background: 'var(--panel, #fff)',
+              borderRadius: 999,
+              padding: '4px 10px 4px 4px',
+              maxWidth: 220,
+            }}
+          >
+            {(session.user?.user_metadata?.avatar_url ||
+              session.user?.user_metadata?.picture) ? (
+              <img
+                src={
+                  session.user.user_metadata.avatar_url ||
+                  session.user.user_metadata.picture
+                }
+                alt=""
+                width={28}
+                height={28}
+                style={{ borderRadius: '50%', objectFit: 'cover' }}
+              />
+            ) : (
+              <span
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: '50%',
+                  background: 'linear-gradient(135deg,#2563eb,#7c3aed)',
+                  color: '#fff',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}
+              >
+                {(
+                  session.user?.user_metadata?.full_name ||
+                  session.user?.user_metadata?.name ||
+                  session.user?.email ||
+                  '?'
+                )
+                  .toString()
+                  .charAt(0)
+                  .toUpperCase()}
+              </span>
+            )}
+            <span
+              style={{
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                fontSize: '0.85rem',
+                fontWeight: 600,
+              }}
+            >
+              {session.user?.user_metadata?.full_name ||
+                session.user?.user_metadata?.name ||
+                session.user?.email}
+            </span>
+          </button>
 
           <button className="ghost-btn" onClick={handleLogout}>
             Logout
@@ -6191,6 +6536,332 @@ function App() {
       )}
 
       {/* ===================== DELETE ACCOUNT ===================== */}
+      
+      {showProfileModal && (
+        <div
+          className="modal-overlay"
+          onClick={() => !profileSaving && setShowProfileModal(false)}
+        >
+          <div
+            className="modal-card"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: 440, width: '92%' }}
+          >
+            <div
+              className="modal-header"
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '14px 18px',
+                borderBottom: '1px solid var(--border)',
+              }}
+            >
+              <h3 style={{ margin: 0 }}>Your profile</h3>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => setShowProfileModal(false)}
+              >
+                ✕
+              </button>
+            </div>
+            <div
+              className="modal-body"
+              style={{
+                padding: 18,
+                maxHeight: 'min(70vh, 640px)',
+                overflowY: 'auto',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 14,
+                  marginBottom: 16,
+                }}
+              >
+                {profileAvatar ? (
+                  <img
+                    src={profileAvatar}
+                    alt=""
+                    width={64}
+                    height={64}
+                    style={{ borderRadius: '50%', objectFit: 'cover' }}
+                  />
+                ) : (
+                  <span
+                    style={{
+                      width: 64,
+                      height: 64,
+                      borderRadius: '50%',
+                      background: 'linear-gradient(135deg,#2563eb,#7c3aed)',
+                      color: '#fff',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: 22,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {(profileName || session?.user?.email || '?')
+                      .charAt(0)
+                      .toUpperCase()}
+                  </span>
+                )}
+                <div>
+                  <label className="btn btn-ghost" style={{ cursor: 'pointer' }}>
+                    Upload photo
+                    <input
+                      type="file"
+                      accept="image/*"
+                      hidden
+                      onChange={handleProfileAvatarChange}
+                    />
+                  </label>
+                  <p
+                    style={{
+                      margin: '6px 0 0',
+                      fontSize: 12,
+                      color: 'var(--text-muted)',
+                    }}
+                  >
+                    Square image works best. Saved with your account.
+                  </p>
+                </div>
+              </div>
+
+              <form onSubmit={handleSaveProfile} style={{ display: 'grid', gap: 12 }}>
+                <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+                  <span>Display name</span>
+                  <input
+                    className="search-input"
+                    value={profileName}
+                    onChange={(e) => setProfileName(e.target.value)}
+                    placeholder="Your name"
+                    disabled={profileSaving}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+                  <span>Email</span>
+                  <input
+                    className="search-input"
+                    value={session?.user?.email || ''}
+                    disabled
+                    readOnly
+                  />
+                </label>
+
+                <h4 style={{ margin: '8px 0 0', fontSize: 14 }}>Theme</h4>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {['light', 'dark'].map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      className={`btn ${profilePrefs.theme === t ? 'btn-primary' : 'btn-ghost'}`}
+                      onClick={() =>
+                        setProfilePrefs((p) => ({ ...p, theme: t }))
+                      }
+                      disabled={profileSaving}
+                    >
+                      {t === 'light' ? '☀️ Light' : '🌙 Dark'}
+                    </button>
+                  ))}
+                </div>
+
+                <h4 style={{ margin: '8px 0 0', fontSize: 14 }}>Default workspace</h4>
+                <select
+                  className="search-input"
+                  value={profilePrefs.default_workspace}
+                  onChange={(e) =>
+                    setProfilePrefs((p) => ({
+                      ...p,
+                      default_workspace: e.target.value,
+                    }))
+                  }
+                  disabled={profileSaving}
+                >
+                  <option value="last">Remember last used</option>
+                  <option value="personal">Always Personal</option>
+                  {(organizations || []).map((o) => (
+                    <option key={o.id} value={o.id}>
+                      Org: {o.name} ({o.role || 'member'})
+                    </option>
+                  ))}
+                </select>
+
+                <h4 style={{ margin: '8px 0 0', fontSize: 14 }}>Notifications</h4>
+                <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
+                  <input
+                    type="checkbox"
+                    checked={profilePrefs.notifications_enabled}
+                    onChange={(e) =>
+                      setProfilePrefs((p) => ({
+                        ...p,
+                        notifications_enabled: e.target.checked,
+                      }))
+                    }
+                    disabled={profileSaving}
+                  />
+                  Enable in-app notifications
+                </label>
+                <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, opacity: profilePrefs.notifications_enabled ? 1 : 0.5 }}>
+                  <input
+                    type="checkbox"
+                    checked={profilePrefs.notify_expiry}
+                    onChange={(e) =>
+                      setProfilePrefs((p) => ({
+                        ...p,
+                        notify_expiry: e.target.checked,
+                      }))
+                    }
+                    disabled={profileSaving || !profilePrefs.notifications_enabled}
+                  />
+                  Expiry warnings
+                </label>
+                <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, opacity: profilePrefs.notifications_enabled ? 1 : 0.5 }}>
+                  <input
+                    type="checkbox"
+                    checked={profilePrefs.notify_low_stock}
+                    onChange={(e) =>
+                      setProfilePrefs((p) => ({
+                        ...p,
+                        notify_low_stock: e.target.checked,
+                      }))
+                    }
+                    disabled={profileSaving || !profilePrefs.notifications_enabled}
+                  />
+                  Low stock alerts
+                </label>
+                <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, opacity: profilePrefs.notifications_enabled ? 1 : 0.5 }}>
+                  <input
+                    type="checkbox"
+                    checked={profilePrefs.notify_usage}
+                    onChange={(e) =>
+                      setProfilePrefs((p) => ({
+                        ...p,
+                        notify_usage: e.target.checked,
+                      }))
+                    }
+                    disabled={profileSaving || !profilePrefs.notifications_enabled}
+                  />
+                  Member usage (admins)
+                </label>
+
+                <h4 style={{ margin: '8px 0 0', fontSize: 14 }}>Linked organizations</h4>
+                {(organizations || []).length === 0 ? (
+                  <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>
+                    No organizations yet. Create one or accept an invite.
+                  </p>
+                ) : (
+                  <ul style={{ margin: 0, padding: '0 0 0 18px', fontSize: 13 }}>
+                    {(organizations || []).map((o) => (
+                      <li key={o.id} style={{ marginBottom: 6 }}>
+                        <strong>{o.name}</strong>
+                        {' · '}
+                        <span style={{ textTransform: 'capitalize' }}>
+                          {o.role || 'member'}
+                        </span>
+                        {String(activeOrgId) === String(o.id) ? ' · current' : ''}
+                        {' '}
+                        <button
+                          type="button"
+                          className="btn-sm"
+                          style={{ marginLeft: 6 }}
+                          onClick={() => {
+                            switchToOrganization(o)
+                            setProfileMsg({
+                              type: 'success',
+                              text: `Switched to ${o.name}`,
+                            })
+                          }}
+                        >
+                          Open
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={profileSaving}
+                >
+                  {profileSaving ? 'Saving…' : 'Save profile & preferences'}
+                </button>
+              </form>
+
+              <hr style={{ margin: '18px 0', border: 0, borderTop: '1px solid var(--border)' }} />
+
+              <h4 style={{ margin: '0 0 10px' }}>Change password</h4>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 0 }}>
+                Use this after signing in with a temporary invite password.
+              </p>
+              <form onSubmit={handleChangePassword} style={{ display: 'grid', gap: 10 }}>
+                <input
+                  className="search-input"
+                  type="password"
+                  placeholder="New password (min 6 characters)"
+                  value={profileNewPassword}
+                  onChange={(e) => setProfileNewPassword(e.target.value)}
+                  autoComplete="new-password"
+                  disabled={profileSaving}
+                  minLength={6}
+                />
+                <input
+                  className="search-input"
+                  type="password"
+                  placeholder="Confirm new password"
+                  value={profileConfirmPassword}
+                  onChange={(e) => setProfileConfirmPassword(e.target.value)}
+                  autoComplete="new-password"
+                  disabled={profileSaving}
+                  minLength={6}
+                />
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={profileSaving}
+                >
+                  Update password
+                </button>
+              </form>
+
+              <hr style={{ margin: '18px 0', border: 0, borderTop: '1px solid var(--border)' }} />
+
+              <h4 style={{ margin: '0 0 8px' }}>Sessions</h4>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 0 }}>
+                Sign out of this browser and revoke sessions on other devices.
+              </p>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                style={{ color: '#b91c1c', borderColor: '#fecaca' }}
+                disabled={profileSaving}
+                onClick={handleSignOutAllDevices}
+              >
+                Sign out all devices
+              </button>
+
+              {profileMsg && (
+                <p
+                  style={{
+                    marginTop: 12,
+                    fontSize: 13,
+                    color: profileMsg.type === 'error' ? '#b91c1c' : '#15803d',
+                  }}
+                >
+                  {profileMsg.text}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+
       {showDeleteAccount && canSeeDeleteAccount && (
         <div className="modal-overlay" onClick={() => setShowDeleteAccount(false)}>
           <div className="modal" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
