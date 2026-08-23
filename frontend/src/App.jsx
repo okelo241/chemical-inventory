@@ -220,7 +220,63 @@ const FILTER_PRESETS = [
   { id: 'soon', label: 'Expiring Soon', icon: '⏳' },
   { id: 'expired', label: 'Expired', icon: '🚫' },
   { id: 'no-sds', label: 'Missing SDS', icon: '📄' },
+  { id: 'peroxide', label: 'Peroxide watch', icon: '⚠️' },
+  { id: 'in_stock', label: 'In stock', icon: '🟢' },
+  { id: 'in_use', label: 'In use', icon: '🔵' },
+  { id: 'empty', label: 'Empty', icon: '⚪' },
+  { id: 'disposed', label: 'Disposed', icon: '🗑️' },
 ]
+
+/** Lifecycle options for containers (CASRAI-aligned) */
+const LIFECYCLE_OPTIONS = [
+  { id: 'in_stock', label: 'In stock', hint: 'Unopened or full inventory' },
+  { id: 'in_use', label: 'In use', hint: 'Opened / actively used' },
+  { id: 'empty', label: 'Empty', hint: 'Container empty — retire soon' },
+  { id: 'disposed', label: 'Disposed', hint: 'Removed via waste stream' },
+  { id: 'transferred', label: 'Transferred', hint: 'Moved to another lab/unit' },
+]
+
+const hasSdsRecord = (chemical, meta = {}) => {
+  if (!chemical) return false
+  if (chemical.sds_filename || chemical.sds_url || meta.sds_filename || meta.sds_url) return true
+  if (chemical.sds_reviewed_at || meta.sds_reviewed_at) return true
+  return false
+}
+
+const isPeroxideWatchItem = (chemical) => {
+  try {
+    const classes = resolveEffectiveClasses(chemical) || []
+    return classes.includes('peroxide_former') || classes.includes('organic_peroxide')
+  } catch {
+    return false
+  }
+}
+
+/** Days since date opened (null if unknown) */
+const daysSinceOpened = (chemical) => {
+  const raw = chemical?.date_opened || chemical?.opened_at
+  if (!raw) return null
+  const d = daysUntil // wrong - need days since
+  try {
+    const opened = new Date(raw)
+    if (Number.isNaN(opened.getTime())) return null
+    const now = new Date()
+    return Math.floor((now - opened) / (24 * 60 * 60 * 1000))
+  } catch {
+    return null
+  }
+}
+
+/** Location key for co-storage segregation checks */
+const locationKeyOf = (c) => {
+  if (!c) return ''
+  const parts = [c.loc_building, c.loc_room, c.loc_cabinet, c.loc_shelf]
+    .map((x) => String(x || '').trim())
+    .filter(Boolean)
+  if (parts.length) return parts.join(' / ').toLowerCase()
+  return String(c.location || '').trim().toLowerCase()
+}
+
 
 const EMPTY_FORM = {
   name: '',
@@ -253,6 +309,13 @@ const EMPTY_FORM = {
   parent_cas_key: '',
   lab_unit: '',
   archived: false,
+  // CASRAI high-value fields
+  date_received: '',
+  date_opened: '',
+  // in_stock | in_use | empty | disposed | transferred
+  lifecycle_status: 'in_stock',
+  sds_filename: '',
+  inventory_owner: '',
 }
 
 /** Idle timeout: 30 minutes of no user activity → automatic logout */
@@ -3106,7 +3169,52 @@ function App() {
   /* DERIVED COMPATIBILITY (must be early enough for effects)                 */
   /* ======================================================================== */
 
-  const compatibilityIssues = useMemo(
+  
+  const casraiReports = useMemo(() => {
+    const list = Array.isArray(chemicals) ? chemicals : []
+    const active = list.filter((c) => !(c.archived || getChemMeta(c.id).archived))
+    const missingSds = active.filter((c) => !hasSdsRecord(c, getChemMeta(c.id)))
+    const peroxide = active.filter((c) => isPeroxideWatchItem(c))
+    const noOpened = peroxide.filter((c) => !(c.date_opened || getChemMeta(c.id).date_opened))
+    // EPCRA-style rollup by CAS
+    const byCas = {}
+    for (const c of active) {
+      const cas = (c.cas_number || 'NO-CAS').trim() || 'NO-CAS'
+      const status = c.lifecycle_status || getChemMeta(c.id).lifecycle_status || 'in_stock'
+      if (status === 'disposed' || status === 'transferred' || status === 'empty') continue
+      if (!byCas[cas]) {
+        byCas[cas] = {
+          cas,
+          name: c.name,
+          totalQty: 0,
+          unit: c.unit || '',
+          containers: 0,
+          locations: new Set(),
+        }
+      }
+      byCas[cas].totalQty += Number(c.quantity) || 0
+      byCas[cas].containers += 1
+      const loc = locationKeyOf(c) || c.location || '—'
+      byCas[cas].locations.add(loc)
+      if (!byCas[cas].name && c.name) byCas[cas].name = c.name
+    }
+    const epcraRows = Object.values(byCas)
+      .map((r) => ({
+        ...r,
+        locations: Array.from(r.locations).join('; '),
+      }))
+      .sort((a, b) => b.totalQty - a.totalQty)
+    return {
+      missingSdsCount: missingSds.length,
+      peroxideCount: peroxide.length,
+      peroxideMissingOpened: noOpened.length,
+      epcraRows,
+      missingSds,
+      peroxide,
+    }
+  }, [chemicals])
+
+const compatibilityIssues = useMemo(
     () => buildCompatibilityIssues(chemicals),
     [chemicals]
   )
@@ -3164,6 +3272,59 @@ function App() {
         }
       }
 
+
+      // Harder storage segregation: block High-risk co-location unless confirmed
+      try {
+        const candidate = {
+          ...formData,
+          location: locationJoined,
+          id: editingId || 'new',
+        }
+        const locKey = locationKeyOf(candidate)
+        if (locKey) {
+          const others = (chemicals || []).filter((c) => {
+            if (editingId && String(c.id) === String(editingId)) return false
+            if (c.archived || getChemMeta(c.id).archived) return false
+            return locationKeyOf(c) === locKey
+          })
+          const highConflicts = []
+          const candClasses = resolveEffectiveClasses(candidate)
+          for (const o of others) {
+            const oClasses = resolveEffectiveClasses(o)
+            // reuse COMPATIBILITY_RULES via build if available
+            for (const rule of CLASS_COMPATIBILITY_RULES || []) {
+              const a = rule.a
+              const b = rule.b
+              const hit =
+                (candClasses.includes(a) && oClasses.includes(b)) ||
+                (candClasses.includes(b) && oClasses.includes(a))
+              if (hit && rule.risk === 'High') {
+                highConflicts.push({
+                  name: o.name,
+                  reason: rule.reason,
+                })
+              }
+            }
+          }
+          if (highConflicts.length) {
+            const lines = highConflicts
+              .slice(0, 5)
+              .map((x) => `• ${x.name}: ${x.reason}`)
+              .join('\n')
+            const ok = window.confirm(
+              `HIGH storage conflict at "${locationJoined || locKey}":\n\n${lines}\n\nSave anyway? (Cancel to fix location)`
+            )
+            if (!ok) {
+              setSubmitting(false)
+              return
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('segregation check failed', err)
+      }
+
+
       const payload = {
         name: formData.name.trim(),
         cas_number: formData.cas_number.trim() || null,
@@ -3212,6 +3373,13 @@ function App() {
           container_code: formData.container_code || undefined,
           lab_unit: formData.lab_unit || activeLabUnit || undefined,
           location_path: locationJoined || undefined,
+          date_received: formData.date_received || undefined,
+          date_opened: formData.date_opened || undefined,
+          lifecycle_status: formData.lifecycle_status || 'in_stock',
+          sds_url: formData.sds_url || undefined,
+          sds_filename: formData.sds_filename || undefined,
+          inventory_owner: formData.inventory_owner || undefined,
+          pubchem_url: formData.pubchem_url || undefined,
         })
       }
       pushAudit(editingId ? 'chemical_update' : 'chemical_create', {
@@ -3667,6 +3835,14 @@ function App() {
       sds_review_months: String(meta.sds_review_months || SDS_REVIEW_DEFAULT_MONTHS),
       container_code: meta.container_code || '',
       lab_unit: meta.lab_unit || activeLabUnit || '',
+      date_received: chemical.date_received || meta.date_received || '',
+      date_opened: chemical.date_opened || meta.date_opened || '',
+      lifecycle_status:
+        chemical.lifecycle_status || meta.lifecycle_status || 'in_stock',
+      sds_url: chemical.sds_url || meta.sds_url || '',
+      sds_filename: chemical.sds_filename || meta.sds_filename || '',
+      inventory_owner: chemical.inventory_owner || meta.inventory_owner || '',
+      pubchem_url: chemical.pubchem_url || meta.pubchem_url || '',
     })
     setEditingId(chemical.id)
     setShowForm(true)
@@ -3683,6 +3859,14 @@ function App() {
       return { ...prev, chemical_classes: Array.from(merged) }
     })
   }, [formData.name, formData.hazard_symbols, showForm])
+
+  // When date opened is set, default lifecycle to in_use
+  useEffect(() => {
+    if (!showForm) return
+    if (formData.date_opened && formData.lifecycle_status === 'in_stock') {
+      setFormData((prev) => ({ ...prev, lifecycle_status: 'in_use' }))
+    }
+  }, [formData.date_opened, showForm]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
    * PubChem auto-enrichment (debounced).
@@ -3905,7 +4089,15 @@ function App() {
       if (filter === 'low') return isLow(chemical)
       if (filter === 'expired') return isExpired(chemical)
       if (filter === 'soon') return isExpiringSoon(chemical)
-      if (filter === 'no-sds') return !chemical.sds_filename
+      if (filter === 'no-sds') {
+        const meta = getChemMeta(chemical.id)
+        return !hasSdsRecord(chemical, meta)
+      }
+      if (filter === 'peroxide') return isPeroxideWatchItem(chemical)
+      if (filter === 'in_stock' || filter === 'in_use' || filter === 'empty' || filter === 'disposed') {
+        const status = (chemical.lifecycle_status || getChemMeta(chemical.id).lifecycle_status || 'in_stock')
+        return status === filter
+      }
       if (locationFilter && chemical.location !== locationFilter) return false
       if (hazardFilter && !(chemical.hazard_symbols || []).includes(hazardFilter)) return false
       if (activeLabUnit) {
@@ -4611,7 +4803,261 @@ function App() {
               <span className="collection-count">{collectionCount}</span>
             )}
           </button>
+        <button
+          className={mainView === 'compliance' ? 'tab active' : 'tab'}
+          onClick={() => setMainView('compliance')}
+          title="SDS gaps, peroxide watch, quantity-by-CAS"
+        >
+          📋 Compliance
+        </button>
+        <button
+          className={mainView === 'reconcile' ? 'tab active' : 'tab'}
+          onClick={() => setMainView('reconcile')}
+          title="Physical inventory reconciliation audit"
+        >
+          ✅ Reconcile
+        </button>
       </div>
+
+      {/* ===================== COMPLIANCE (CASRAI) ===================== */}
+      {mainView === 'compliance' && (
+        <div className="dashboard" style={{ marginBottom: 24 }}>
+          <div className="stats-bar">
+            <div className="stat-card">
+              <span className="stat-value">{casraiReports.missingSdsCount}</span>
+              <span className="stat-label">Missing SDS</span>
+            </div>
+            <div className="stat-card warning">
+              <span className="stat-value">{casraiReports.peroxideCount}</span>
+              <span className="stat-label">Peroxide watch</span>
+            </div>
+            <div className="stat-card caution">
+              <span className="stat-value">{casraiReports.peroxideMissingOpened}</span>
+              <span className="stat-label">No date opened</span>
+            </div>
+            <div className="stat-card">
+              <span className="stat-value">{casraiReports.epcraRows.length}</span>
+              <span className="stat-label">CAS rollup rows</span>
+            </div>
+          </div>
+
+          <div className="card" style={{ marginBottom: 16, padding: 16 }}>
+            <h3 style={{ marginTop: 0 }}>Missing SDS (active containers)</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+              CASRAI / OSHA HazCom: every product identifier should resolve to a current SDS.
+            </p>
+            {casraiReports.missingSds.length === 0 ? (
+              <p style={{ color: 'var(--success)' }}>All active items have an SDS link or review date.</p>
+            ) : (
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.9rem' }}>
+                {casraiReports.missingSds.slice(0, 40).map((c) => (
+                  <li key={c.id}>
+                    <strong>{c.name}</strong>
+                    {c.cas_number ? ` · CAS ${c.cas_number}` : ''}
+                    <button
+                      type="button"
+                      className="btn-sm"
+                      style={{ marginLeft: 8 }}
+                      onClick={() => handleEdit(c)}
+                    >
+                      Fix
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              style={{ marginTop: 10 }}
+              onClick={() => {
+                setFilter('no-sds')
+                setMainView('inventory')
+              }}
+            >
+              Open as inventory filter
+            </button>
+          </div>
+
+          <div className="card" style={{ marginBottom: 16, padding: 16 }}>
+            <h3 style={{ marginTop: 0 }}>Peroxide watchlist</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+              Driven by chemical class (peroxide former / organic peroxide). Date opened should be set for testing schedules.
+            </p>
+            {casraiReports.peroxide.length === 0 ? (
+              <p>No peroxide-class chemicals in active inventory.</p>
+            ) : (
+              <div className="table-wrapper">
+                <table className="chem-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>CAS</th>
+                      <th>Opened</th>
+                      <th>Days open</th>
+                      <th>Lifecycle</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {casraiReports.peroxide.map((c) => {
+                      const meta = getChemMeta(c.id)
+                      const opened = c.date_opened || meta.date_opened || '—'
+                      const days = daysSinceOpened({ ...c, date_opened: opened === '—' ? null : opened })
+                      return (
+                        <tr key={c.id}>
+                          <td>{c.name}</td>
+                          <td>{c.cas_number || '—'}</td>
+                          <td>{opened}</td>
+                          <td>{days == null ? '—' : days}</td>
+                          <td>{c.lifecycle_status || meta.lifecycle_status || 'in_stock'}</td>
+                          <td>
+                            <button type="button" className="btn-sm" onClick={() => handleEdit(c)}>
+                              Edit
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="card" style={{ padding: 16 }}>
+            <h3 style={{ marginTop: 0 }}>Quantity-by-CAS rollup (EPCRA-style)</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+              Active containers only (excludes empty / disposed / transferred). Not a full Tier II form — use for threshold screening.
+            </p>
+            <div className="table-wrapper">
+              <table className="chem-table">
+                <thead>
+                  <tr>
+                    <th>CAS</th>
+                    <th>Name</th>
+                    <th>Containers</th>
+                    <th>Total qty</th>
+                    <th>Unit</th>
+                    <th>Locations</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {casraiReports.epcraRows.slice(0, 80).map((r) => (
+                    <tr key={r.cas}>
+                      <td>{r.cas}</td>
+                      <td>{r.name}</td>
+                      <td>{r.containers}</td>
+                      <td>{r.totalQty}</td>
+                      <td>{r.unit}</td>
+                      <td style={{ maxWidth: 220, whiteSpace: 'normal' }}>{r.locations}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================== RECONCILE AUDIT ===================== */}
+      {mainView === 'reconcile' && (
+        <div className="dashboard" style={{ marginBottom: 24 }}>
+          <div className="card" style={{ padding: 16, marginBottom: 12 }}>
+            <h3 style={{ marginTop: 0 }}>Physical reconciliation audit</h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+              Walk the lab and mark each listed container as found (OK), missing from shelf, or note extras later.
+              Many EH&S programs do this annually before Tier II.
+            </p>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={() => {
+                  const next = {}
+                  ;(chemicals || []).forEach((c) => {
+                    if (!(c.archived || getChemMeta(c.id).archived)) next[c.id] = 'ok'
+                  })
+                  setReconChecks(next)
+                  showMessage('success', 'Marked all active as OK — adjust exceptions as you walk')
+                }}
+              >
+                Mark all OK
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setReconChecks({})}
+              >
+                Clear marks
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => {
+                  const missing = Object.entries(reconChecks).filter(([, v]) => v === 'missing')
+                  pushAudit('reconciliation', {
+                    checked: Object.keys(reconChecks).length,
+                    missing: missing.length,
+                    at: new Date().toISOString(),
+                  })
+                  showMessage(
+                    'success',
+                    `Audit saved: ${Object.keys(reconChecks).length} checked, ${missing.length} missing`
+                  )
+                }}
+              >
+                Save audit snapshot
+              </button>
+            </div>
+          </div>
+          <div className="table-wrapper">
+            <table className="chem-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>CAS</th>
+                  <th>Location</th>
+                  <th>Qty</th>
+                  <th>Status</th>
+                  <th>Shelf check</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(chemicals || [])
+                  .filter((c) => !(c.archived || getChemMeta(c.id).archived))
+                  .map((c) => (
+                    <tr key={c.id}>
+                      <td>{c.name}</td>
+                      <td>{c.cas_number || '—'}</td>
+                      <td>{c.location || locationKeyOf(c) || '—'}</td>
+                      <td>
+                        {c.quantity} {c.unit}
+                      </td>
+                      <td>{c.lifecycle_status || getChemMeta(c.id).lifecycle_status || 'in_stock'}</td>
+                      <td>
+                        <select
+                          value={reconChecks[c.id] || ''}
+                          onChange={(e) =>
+                            setReconChecks((prev) => ({
+                              ...prev,
+                              [c.id]: e.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">—</option>
+                          <option value="ok">OK / found</option>
+                          <option value="missing">Missing</option>
+                          <option value="qty_diff">Qty differs</option>
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* ===================== DASHBOARD ===================== */}
       {mainView === 'dashboard' ? (
@@ -5012,6 +5458,63 @@ function App() {
                         </div>
                       </div>
                     )}
+
+
+                    <div className="form-group">
+                      <label htmlFor="date_received">Date received</label>
+                      <input
+                        id="date_received"
+                        name="date_received"
+                        type="date"
+                        value={formData.date_received || ''}
+                        onChange={handleChange}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="date_opened">Date opened</label>
+                      <input
+                        id="date_opened"
+                        name="date_opened"
+                        type="date"
+                        value={formData.date_opened || ''}
+                        onChange={handleChange}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="lifecycle_status">Lifecycle status</label>
+                      <select
+                        id="lifecycle_status"
+                        name="lifecycle_status"
+                        value={formData.lifecycle_status || 'in_stock'}
+                        onChange={handleChange}
+                      >
+                        {LIFECYCLE_OPTIONS.map((o) => (
+                          <option key={o.id} value={o.id}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="inventory_owner">Inventory owner (CHO)</label>
+                      <input
+                        id="inventory_owner"
+                        name="inventory_owner"
+                        value={formData.inventory_owner || ''}
+                        onChange={handleChange}
+                        placeholder="Responsible person name or email"
+                      />
+                    </div>
+                    <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                      <label htmlFor="sds_url_field">SDS URL (manufacturer preferred)</label>
+                      <input
+                        id="sds_url_field"
+                        name="sds_url"
+                        value={formData.sds_url || ''}
+                        onChange={handleChange}
+                        placeholder="Paste SDS link if you have one"
+                      />
+                    </div>
 
                     <div className={`form-group ${formErrors.quantity ? 'error' : ''}`}>
                       <label htmlFor="quantity">Quantity</label>
