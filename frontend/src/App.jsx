@@ -728,29 +728,39 @@ const resolveEffectiveClasses = (chemical) => {
 
 /**
  * Lookup a compound on PubChem by name or CAS number.
- * Returns { molecular_formula, iupac_name, cid } or null.
- * Prefers CAS-style queries when the string looks like a CAS RN.
+ * Returns CAS, formula, name, classes, and safety URL when available.
  */
+const CAS_REGEX = /\b(\d{2,7}-\d{2}-\d)\b/
+
+const extractCasFromSynonyms = (synonyms = []) => {
+  for (const s of synonyms) {
+    const m = String(s).match(CAS_REGEX)
+    if (m) return m[1]
+  }
+  return null
+}
+
 const lookupPubChem = async (query) => {
   if (!query || typeof query !== 'string' || query.trim().length < 2) return null
   const cleaned = query.trim()
-
-  // Detect simple CAS pattern (e.g. 7722-84-1)
   const looksLikeCas = /^\d{2,7}-\d{2}-\d$/.test(cleaned)
 
   const tryFetchCid = async (path) => {
-    const url = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/${path}/cids/JSON`
-    const res = await fetch(url)
-    if (!res.ok) return null
-    const data = await res.json()
-    return data?.IdentifierList?.CID?.[0] || null
+    try {
+      const res = await fetch(
+        `https://pubchem.ncbi.nlm.nih.gov/rest/pug/${path}/cids/JSON`
+      )
+      if (!res.ok) return null
+      const data = await res.json()
+      return data?.IdentifierList?.CID?.[0] || null
+    } catch {
+      return null
+    }
   }
 
   try {
     let cid = null
-
     if (looksLikeCas) {
-      // Prefer name endpoint first (PubChem accepts CAS there), then xref/RN
       cid = await tryFetchCid(`compound/name/${encodeURIComponent(cleaned)}`)
       if (!cid) {
         cid = await tryFetchCid(`compound/xref/RN/${encodeURIComponent(cleaned)}`)
@@ -758,26 +768,103 @@ const lookupPubChem = async (query) => {
     } else {
       cid = await tryFetchCid(`compound/name/${encodeURIComponent(cleaned)}`)
     }
-
     if (!cid) return null
 
-    const propUrl = `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/property/MolecularFormula,IUPACName,Title/JSON`
+    const propUrl =
+      `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/property/` +
+      `MolecularFormula,MolecularWeight,IUPACName,Title/JSON`
     const propResponse = await fetch(propUrl)
     if (!propResponse.ok) return null
     const propData = await propResponse.json()
     const properties = propData?.PropertyTable?.Properties?.[0]
     if (!properties) return null
 
+    let cas_number = looksLikeCas ? cleaned : null
+    try {
+      const synRes = await fetch(
+        `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/synonyms/JSON`
+      )
+      if (synRes.ok) {
+        const synData = await synRes.json()
+        const synonyms =
+          synData?.InformationList?.Information?.[0]?.Synonym || []
+        if (!cas_number) cas_number = extractCasFromSynonyms(synonyms)
+      }
+    } catch {
+      /* ignore */
+    }
+
+    const displayName = properties.Title || properties.IUPACName || cleaned
+    let chemical_classes = []
+    try {
+      chemical_classes = autoClassifyChemical(displayName, []) || []
+    } catch {
+      chemical_classes = []
+    }
+
     return {
-      molecular_formula: properties.MolecularFormula || null,
-      iupac_name: properties.IUPACName || properties.Title || null,
       cid,
+      cas_number: cas_number || null,
+      molecular_formula: properties.MolecularFormula || null,
+      molecular_weight: properties.MolecularWeight
+        ? String(properties.MolecularWeight)
+        : null,
+      iupac_name: properties.IUPACName || null,
+      title: properties.Title || null,
+      display_name: displayName,
+      chemical_classes,
+      sds_url: `https://pubchem.ncbi.nlm.nih.gov/compound/${cid}#section=Safety-and-Hazards`,
+      pubchem_url: `https://pubchem.ncbi.nlm.nih.gov/compound/${cid}`,
     }
   } catch (error) {
     console.warn('PubChem lookup failed:', error)
     return null
   }
 }
+
+/** Merge PubChem result into form state (empty fields only unless force). */
+const applyPubChemToForm = (prev, result, { force = false } = {}) => {
+  if (!prev || !result) return prev || {}
+  const empty = (v) => v === undefined || v === null || String(v).trim() === ''
+  const next = { ...prev }
+
+  if (result.cas_number && (force || empty(prev.cas_number))) {
+    next.cas_number = result.cas_number
+  }
+  if (result.molecular_formula && (force || empty(prev.molecular_formula))) {
+    next.molecular_formula = result.molecular_formula
+  }
+  if (result.display_name && (force || empty(prev.name))) {
+    next.name = result.display_name
+  }
+  if (result.molecular_weight && (force || empty(prev.molecular_weight))) {
+    next.molecular_weight = result.molecular_weight
+  }
+  if (result.sds_url && (force || empty(prev.sds_url))) {
+    next.sds_url = result.sds_url
+  }
+  if (result.pubchem_url) {
+    next.pubchem_url = result.pubchem_url
+    next.pubchem_cid = result.cid
+  }
+  if (Array.isArray(result.chemical_classes) && result.chemical_classes.length) {
+    const existing = Array.isArray(prev.chemical_classes) ? prev.chemical_classes : []
+    if (force || existing.length === 0) {
+      next.chemical_classes = result.chemical_classes
+    }
+  }
+  if (empty(prev.barcode) && empty(prev.container_code)) {
+    try {
+      if (typeof generateBarcodeValue === 'function') {
+        next.barcode = generateBarcodeValue()
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return next
+}
+
 
 /* ========================================================================== */
 /* SECTION 8 — CSV / PDF EXPORT                                               */
