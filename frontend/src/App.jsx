@@ -1968,6 +1968,7 @@ function App() {
       const newlyCreated = []
 
       chemicalList.forEach((chemical) => {
+        try {
         if (isExpired(chemical)) {
           newlyCreated.push(
             createNotification(
@@ -2001,9 +2002,14 @@ function App() {
         }
 
         // Peroxide-forming solvents / organic peroxides — test/date awareness
-        const classes = getEffectiveClasses(chemical)
-        const isPeroxideFormer =
-          classes.includes('peroxide_former') || classes.includes('organic_peroxide')
+        let isPeroxideFormer = false
+        try {
+          const classes = resolveEffectiveClasses(chemical) || []
+          isPeroxideFormer =
+            classes.includes('peroxide_former') || classes.includes('organic_peroxide')
+        } catch {
+          isPeroxideFormer = false
+        }
         if (isPeroxideFormer && !chemical.archived) {
           const opened = chemical.date_opened || chemical.opened_at || null
           const expiry = chemical.expiry_date
@@ -2030,6 +2036,9 @@ function App() {
               chemical.id
             )
           )
+        }
+        } catch (err) {
+          console.warn('notify chemical failed', chemical?.id, err)
         }
       })
 
