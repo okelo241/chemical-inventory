@@ -16,6 +16,35 @@ import biohazard from './assets/Pictograms/biohazardous_infectious_materials.gif
 
 function Landing({ onGetStarted }) {
   const [showBackToTop, setShowBackToTop] = useState(false)
+  const [theme, setTheme] = useState(() => {
+    try {
+      const saved = localStorage.getItem('theme')
+      if (saved === 'dark' || saved === 'light') return saved
+    } catch { /* ignore */ }
+    if (typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      return 'dark'
+    }
+    return 'light'
+  })
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    try {
+      localStorage.setItem('theme', theme)
+    } catch { /* ignore */ }
+  }, [theme])
+
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key === 'theme' && (e.newValue === 'dark' || e.newValue === 'light')) {
+        setTheme(e.newValue)
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  const toggleTheme = () => setTheme((t) => (t === 'light' ? 'dark' : 'light'))
 
   useEffect(() => {
     const handleScroll = () => {
@@ -147,6 +176,16 @@ function Landing({ onGetStarted }) {
           <a href="#faq">FAQ</a>
         </div>
         <div className="nav-actions">
+          <button
+            type="button"
+            className="btn btn-ghost theme-btn"
+            onClick={toggleTheme}
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            aria-label="Toggle color theme"
+            style={{ minWidth: 40, padding: '8px 10px' }}
+          >
+            {theme === 'dark' ? '☀️' : '🌙'}
+          </button>
           <button type="button" className="btn btn-ghost" onClick={onGetStarted}>
             Log in
           </button>

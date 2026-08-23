@@ -74,6 +74,37 @@ function Login({
   // MODE MANAGEMENT
   // 'login' | 'signup' | 'confirm' | 'forgot' | 'reset'
   // ============================================================
+  
+  const [theme, setTheme] = useState(() => {
+    try {
+      const saved = localStorage.getItem('theme')
+      if (saved === 'dark' || saved === 'light') return saved
+    } catch { /* ignore */ }
+    if (typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      return 'dark'
+    }
+    return 'light'
+  })
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    try {
+      localStorage.setItem('theme', theme)
+    } catch { /* ignore */ }
+  }, [theme])
+
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key === 'theme' && (e.newValue === 'dark' || e.newValue === 'light')) {
+        setTheme(e.newValue)
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  const toggleTheme = () => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'))
+
   const [mode, setMode] = useState(isRecoveryLink ? 'reset' : 'login')
 
   // Workspace intent: 'personal' | 'organization'

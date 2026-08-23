@@ -1270,6 +1270,17 @@ function App() {
     setTheme((previous) => (previous === 'light' ? 'dark' : 'light'))
   }, [])
 
+  // Sync theme across tabs / Landing / Login
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key === 'theme' && (e.newValue === 'dark' || e.newValue === 'light')) {
+        setTheme(e.newValue)
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
   // Apply theme / notification prefs stored on the user account
   useEffect(() => {
     if (!session?.user) return
@@ -6543,20 +6554,10 @@ function App() {
           onClick={() => !profileSaving && setShowProfileModal(false)}
         >
           <div
-            className="modal-card"
+            className="modal-card profile-modal"
             onClick={(e) => e.stopPropagation()}
-            style={{ maxWidth: 440, width: '92%' }}
           >
-            <div
-              className="modal-header"
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: '14px 18px',
-                borderBottom: '1px solid var(--border)',
-              }}
-            >
+            <div className="modal-header profile-modal-header">
               <h3 style={{ margin: 0 }}>Your profile</h3>
               <button
                 type="button"
@@ -6654,42 +6655,63 @@ function App() {
                 </label>
 
                 <h4 style={{ margin: '8px 0 0', fontSize: 14 }}>Theme</h4>
-                <div style={{ display: 'flex', gap: 8 }}>
+                <div style={{ display: 'flex', gap: 8 }} className="profile-theme-toggle">
                   {['light', 'dark'].map((t) => (
                     <button
                       key={t}
                       type="button"
                       className={`btn ${profilePrefs.theme === t ? 'btn-primary' : 'btn-ghost'}`}
-                      onClick={() =>
+                      onClick={() => {
                         setProfilePrefs((p) => ({ ...p, theme: t }))
-                      }
+                        setTheme(t)
+                        try {
+                          localStorage.setItem('theme', t)
+                        } catch { /* ignore */ }
+                      }}
                       disabled={profileSaving}
                     >
                       {t === 'light' ? '☀️ Light' : '🌙 Dark'}
                     </button>
                   ))}
                 </div>
+                <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>
+                  Applied immediately. Click Save to sync theme to your account.
+                </p>
 
                 <h4 style={{ margin: '8px 0 0', fontSize: 14 }}>Default workspace</h4>
-                <select
-                  className="search-input"
-                  value={profilePrefs.default_workspace}
-                  onChange={(e) =>
-                    setProfilePrefs((p) => ({
-                      ...p,
-                      default_workspace: e.target.value,
-                    }))
-                  }
-                  disabled={profileSaving}
-                >
-                  <option value="last">Remember last used</option>
-                  <option value="personal">Always Personal</option>
-                  {(organizations || []).map((o) => (
-                    <option key={o.id} value={o.id}>
-                      Org: {o.name} ({o.role || 'member'})
-                    </option>
-                  ))}
-                </select>
+                {isOrgMemberOnly ? (
+                  <p style={{ margin: 0, fontSize: 13, color: 'var(--text-muted)' }}>
+                    Your workspace is managed by your organization admin
+                    {activeOrgName ? (
+                      <>
+                        {' '}
+                        (<strong>{activeOrgName}</strong>
+                        {activeOrgRole ? ` · ${activeOrgRole}` : ''})
+                      </>
+                    ) : null}
+                    . Contact an owner to change organization access.
+                  </p>
+                ) : (
+                  <select
+                    className="search-input"
+                    value={profilePrefs.default_workspace}
+                    onChange={(e) =>
+                      setProfilePrefs((p) => ({
+                        ...p,
+                        default_workspace: e.target.value,
+                      }))
+                    }
+                    disabled={profileSaving}
+                  >
+                    <option value="last">Remember last used</option>
+                    <option value="personal">Always Personal</option>
+                    {(organizations || []).map((o) => (
+                      <option key={o.id} value={o.id}>
+                        Org: {o.name} ({o.role || 'member'})
+                      </option>
+                    ))}
+                  </select>
+                )}
 
                 <h4 style={{ margin: '8px 0 0', fontSize: 14 }}>Notifications</h4>
                 <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
