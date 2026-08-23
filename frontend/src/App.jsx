@@ -1,50 +1,34 @@
-/**
- * ============================================================================
- * CHEMICAL INVENTORY SYSTEM — App.jsx (EXPANDED EDITION)
- * ============================================================================
+/*
+ * Lab Chemical Inventory — App.jsx
+ * Achievable MVP (PRD-aligned, production-oriented)
  *
- * This file is intentionally verbose and long for maintainability,
- * safety documentation, and lab compliance clarity.
+ * Inventory & containers
+ *  - CRUD chemicals, locations (building > room > cabinet > shelf)
+ *  - Unique barcode / QR per bottle, print labels, camera scan
+ *  - Quantity / usage logging, mass-balance style history
+ *  - CSV import/export, archive, My Collection (private)
  *
- * FEATURE SET (complete):
- * - Supabase authentication (session + logout)
- * - Full CRUD for chemicals
- * - SDS PDF upload / download
- * - Low stock + expiry notifications (in-app + browser)
- * - Usage / transaction logging
- * - CSV export + professional PDF reports (jsPDF + autotable)
- * - Dashboard with live stats
- * - Batch / lot + supplier tracking
- * - Advanced search, filters, sorting
- * - Card view + table view
- * - Dark / light theme
- * - Command palette + keyboard shortcuts
- * - Chemical class system (expanded Stanford/NIH-style groups)
- * - Class-based compatibility checker (classes + GHS + name heuristics)
- * - Expanded GHS pictograms (local assets)
- * - PubChem lookup + auto-enrichment (formula from name/CAS, debounced)
- * - Auto-classification of chemicals from name + hazards
- * - Barcode / QR generate, display, and camera scan
- * - Idle auto-logout
- * - Landing page preview without logging out
- * - Personal / Organization workspace switch (individual accounts kept)
- * - Organization invites + member management
- * - Invite copy-link for org onboarding (solid token + copy UX)
- * - CSV import (bulk add chemicals)
- * - SDS completeness % on dashboard / inventory stats
- * - Hierarchical locations (Building / Room / Cabinet / Shelf)
- * - Append-only audit log (client + optional server later)
- * - SDS review dates + missing/outdated report
- * - Archive vs delete, label print, duplicate CAS+location warn
- * - Waste/disposal log, delete-account flow
- * - Header overflow menu (⋯) for secondary actions
+ * Hazard & safety
+ *  - PubChem lookup (name/CAS → formula & enrichment)
+ *  - Chemical classes + GHS-oriented compatibility matrix
+ *  - Storage incompatibility warnings by co-location
+ *  - Expiry, low-stock, and peroxide-former alerts
+ *  - SDS file link / review reminders
  *
- * SAFETY NOTE:
- * Compatibility rules are based on common university EHS storage-group
- * systems (Stanford/NIH ChemTracker-style segregation). They are a strong
- * decision-support layer, not a replacement for SDS Section 7/10 review.
- * ============================================================================
+ * Access & audit
+ *  - Personal + organization workspaces
+ *  - Roles: owner / admin / member (RBAC-lite)
+ *  - Invites with temp password + join token
+ *  - Client audit log (+ optional server audit later)
+ *
+ * Account UX
+ *  - Profile (name, avatar, theme, notification prefs)
+ *  - Default workspace, linked orgs, sign out all devices
+ *  - Dark / light theme (synced across Landing / Login / App)
+ *
+ * Not claimed here: full 21 CFR Part 11, RFID fleet, global SDS marketplace
  */
+
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { supabase } from './supabase'
@@ -259,6 +243,10 @@ const EMPTY_FORM = {
   chemical_classes: [],
   barcode: '',
   // Phase A extras (stored in location string / meta when API lacks columns)
+  sds_url: '',
+  pubchem_url: '',
+  pubchem_cid: '',
+  molecular_weight: '',
   sds_reviewed_at: '',
   sds_review_months: '12',
   container_code: '',
@@ -1920,6 +1908,38 @@ function App() {
               'low',
               'Low Stock Alert',
               `"${chemical.name}" is running low (${chemical.quantity} ${chemical.unit} remaining)`,
+              chemical.id
+            )
+          )
+        }
+
+        // Peroxide-forming solvents / organic peroxides — test/date awareness
+        const classes = getEffectiveClasses(chemical)
+        const isPeroxideFormer =
+          classes.includes('peroxide_former') || classes.includes('organic_peroxide')
+        if (isPeroxideFormer && !chemical.archived) {
+          const opened = chemical.date_opened || chemical.opened_at || null
+          const expiry = chemical.expiry_date
+          let msg =
+            `"${chemical.name}" is a peroxide-forming / peroxide class chemical. ` +
+            'Confirm testing schedule and isolation from oxidizers/acids.'
+          if (expiry) {
+            const d = daysUntil(expiry)
+            if (d !== null && d <= 90) {
+              msg =
+                `"${chemical.name}" (peroxide-related) expires/test window in ${d} day(s). ` +
+                'Follow your lab peroxide-testing SOP.'
+            }
+          } else if (opened) {
+            msg =
+              `"${chemical.name}" was opened (${opened}). ` +
+              'Peroxide formers need periodic testing after opening.'
+          }
+          newlyCreated.push(
+            createNotification(
+              'peroxide',
+              'Peroxide vigilance',
+              msg,
               chemical.id
             )
           )
@@ -3597,17 +3617,11 @@ function App() {
         if (requestId !== pubChemAbortRef.current) return
         if (!result) return
 
-        setFormData((prev) => {
-          // Only fill empty fields — never clobber user input
-          const next = { ...prev }
-          if (!(prev.molecular_formula || '').trim() && result.molecular_formula) {
-            next.molecular_formula = result.molecular_formula
-          }
-          if (!(prev.name || '').trim() && result.iupac_name) {
-            next.name = result.iupac_name
-          }
-          return next
-        })
+        setFormData((prev) => applyPubChemToForm(prev, result, { force: false }))
+        // Soft toast once per successful enrich when CAS or formula was filled
+        if (result.cas_number || result.molecular_formula) {
+          /* avoid noisy toasts on every keystroke — only when CAS newly available */
+        }
       } catch (err) {
         console.warn('PubChem auto-enrich failed:', err)
       } finally {
@@ -3626,7 +3640,7 @@ function App() {
 
   /** Manual PubChem lookup (button). Overwrites formula; fills name only if empty. */
   const handlePubChemLookup = async () => {
-    const query = formData.cas_number.trim() || formData.name.trim()
+    const query = (formData.cas_number || '').trim() || (formData.name || '').trim()
     if (!query) {
       showMessage('error', 'Enter a chemical name or CAS number first')
       return
@@ -3640,12 +3654,17 @@ function App() {
         showMessage('error', 'No results found on PubChem')
         return
       }
-      setFormData((prev) => ({
-        ...prev,
-        molecular_formula: result.molecular_formula || prev.molecular_formula,
-        name: prev.name.trim() ? prev.name : result.iupac_name || prev.name,
-      }))
-      showMessage('success', 'Data loaded from PubChem')
+      setFormData((prev) => applyPubChemToForm(prev, result, { force: true }))
+      const bits = []
+      if (result.cas_number) bits.push(`CAS ${result.cas_number}`)
+      if (result.molecular_formula) bits.push(result.molecular_formula)
+      if (result.sds_url) bits.push('safety link')
+      showMessage(
+        'success',
+        bits.length
+          ? `Auto-filled from PubChem: ${bits.join(' · ')}`
+          : 'Data loaded from PubChem'
+      )
     } catch (error) {
       console.error('PubChem error:', error)
       showMessage('error', 'PubChem lookup failed')
@@ -4811,35 +4830,92 @@ function App() {
                             lookingUp ||
                             (!formData.name.trim() && !formData.cas_number.trim())
                           }
-                          title="Look up molecular formula on PubChem"
+                          title="Auto-fill CAS, formula, hazards & safety link from PubChem"
                         >
-                          {lookingUp ? 'Looking up…' : 'Lookup'}
+                          {lookingUp ? 'Looking up…' : 'Auto-fill'}
                         </button>
                       </div>
+                      <p className="field-hint" style={{ margin: '6px 0 0', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                        Type a name or CAS — CAS, formula, classes, and a PubChem safety link fill in automatically.
+                        Use <strong>Auto-fill</strong> to refresh all fields from PubChem.
+                      </p>
                       {formErrors.name && <span className="error-text">{formErrors.name}</span>}
                     </div>
                     {/* Row 2: CAS + Formula */}
                     <div className="form-group">
-                      <label htmlFor="cas_number">CAS Number</label>
+                      <label htmlFor="cas_number">
+                        CAS Number{' '}
+                        {lookingUp ? (
+                          <span style={{ color: 'var(--primary)', fontWeight: 500 }}>(looking up…)</span>
+                        ) : formData.cas_number ? (
+                          <span style={{ color: 'var(--success)', fontWeight: 500 }}>✓</span>
+                        ) : null}
+                      </label>
                       <input
                         id="cas_number"
                         name="cas_number"
                         value={formData.cas_number}
                         onChange={handleChange}
-                        placeholder="e.g. 7722-84-1"
+                        placeholder="Auto from name, or type CAS"
                       />
                     </div>
 
                     <div className="form-group">
-                      <label htmlFor="molecular_formula">Molecular Formula</label>
+                      <label htmlFor="molecular_formula">
+                        Molecular Formula{' '}
+                        {formData.molecular_formula ? (
+                          <span style={{ color: 'var(--success)', fontWeight: 500 }}>✓</span>
+                        ) : null}
+                      </label>
                       <input
                         id="molecular_formula"
                         name="molecular_formula"
                         value={formData.molecular_formula}
                         onChange={handleChange}
-                        placeholder="e.g. H₂O₂"
+                        placeholder="Auto from PubChem"
                       />
                     </div>
+
+                    {(formData.sds_url || formData.pubchem_url) && (
+                      <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                        <label>Online safety / SDS reference</label>
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            gap: 8,
+                            alignItems: 'center',
+                            padding: '10px 12px',
+                            borderRadius: 10,
+                            border: '1px solid var(--border)',
+                            background: 'var(--bg)',
+                            fontSize: '0.85rem',
+                          }}
+                        >
+                          <span style={{ color: 'var(--text-muted)' }}>
+                            PubChem safety section (not a manufacturer SDS PDF):
+                          </span>
+                          <a
+                            href={formData.sds_url || formData.pubchem_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ fontWeight: 600, color: 'var(--primary)' }}
+                          >
+                            Open safety data ↗
+                          </a>
+                          {formData.cas_number && (
+                            <a
+                              href={`https://www.sigmaaldrich.com/US/en/search/${encodeURIComponent(formData.cas_number)}?focus=products&page=1&perpage=30&sort=relevance&term=${encodeURIComponent(formData.cas_number)}&type=cas_number`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ fontWeight: 600, color: 'var(--primary)' }}
+                            >
+                              Search supplier SDS ↗
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     <div className={`form-group ${formErrors.quantity ? 'error' : ''}`}>
                       <label htmlFor="quantity">Quantity</label>
@@ -6567,52 +6643,23 @@ function App() {
                 ✕
               </button>
             </div>
-            <div
-              className="modal-body"
-              style={{
-                padding: 18,
-                maxHeight: 'min(70vh, 640px)',
-                overflowY: 'auto',
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 14,
-                  marginBottom: 16,
-                }}
-              >
+            <div className="modal-body profile-modal-body">
+              <div className="profile-avatar-row">
                 {profileAvatar ? (
                   <img
                     src={profileAvatar}
                     alt=""
-                    width={64}
-                    height={64}
-                    style={{ borderRadius: '50%', objectFit: 'cover' }}
+                    className="profile-avatar"
                   />
                 ) : (
-                  <span
-                    style={{
-                      width: 64,
-                      height: 64,
-                      borderRadius: '50%',
-                      background: 'linear-gradient(135deg,#2563eb,#7c3aed)',
-                      color: '#fff',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: 22,
-                      fontWeight: 700,
-                    }}
-                  >
+                  <span className="profile-avatar-fallback">
                     {(profileName || session?.user?.email || '?')
                       .charAt(0)
                       .toUpperCase()}
                   </span>
                 )}
-                <div>
-                  <label className="btn btn-ghost" style={{ cursor: 'pointer' }}>
+                <div className="profile-avatar-actions">
+                  <label className="profile-upload-btn">
                     Upload photo
                     <input
                       type="file"
@@ -6621,20 +6668,14 @@ function App() {
                       onChange={handleProfileAvatarChange}
                     />
                   </label>
-                  <p
-                    style={{
-                      margin: '6px 0 0',
-                      fontSize: 12,
-                      color: 'var(--text-muted)',
-                    }}
-                  >
+                  <p className="profile-avatar-hint">
                     Square image works best. Saved with your account.
                   </p>
                 </div>
               </div>
 
-              <form onSubmit={handleSaveProfile} style={{ display: 'grid', gap: 12 }}>
-                <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+              <form onSubmit={handleSaveProfile}>
+                <label className="profile-field">
                   <span>Display name</span>
                   <input
                     className="search-input"
@@ -6644,7 +6685,7 @@ function App() {
                     disabled={profileSaving}
                   />
                 </label>
-                <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+                <label className="profile-field">
                   <span>Email</span>
                   <input
                     className="search-input"
@@ -6674,7 +6715,7 @@ function App() {
                     </button>
                   ))}
                 </div>
-                <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>
+                <p className="profile-section-note">
                   Applied immediately. Click Save to sync theme to your account.
                 </p>
 
@@ -6714,7 +6755,7 @@ function App() {
                 )}
 
                 <h4 style={{ margin: '8px 0 0', fontSize: 14 }}>Notifications</h4>
-                <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
+                <label className="profile-check">
                   <input
                     type="checkbox"
                     checked={profilePrefs.notifications_enabled}
@@ -6728,7 +6769,7 @@ function App() {
                   />
                   Enable in-app notifications
                 </label>
-                <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, opacity: profilePrefs.notifications_enabled ? 1 : 0.5 }}>
+                <label className="profile-check" style={{ opacity: profilePrefs.notifications_enabled ? 1 : 0.5 }}>
                   <input
                     type="checkbox"
                     checked={profilePrefs.notify_expiry}
@@ -6742,7 +6783,7 @@ function App() {
                   />
                   Expiry warnings
                 </label>
-                <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, opacity: profilePrefs.notifications_enabled ? 1 : 0.5 }}>
+                <label className="profile-check" style={{ opacity: profilePrefs.notifications_enabled ? 1 : 0.5 }}>
                   <input
                     type="checkbox"
                     checked={profilePrefs.notify_low_stock}
@@ -6756,7 +6797,7 @@ function App() {
                   />
                   Low stock alerts
                 </label>
-                <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13, opacity: profilePrefs.notifications_enabled ? 1 : 0.5 }}>
+                <label className="profile-check" style={{ opacity: profilePrefs.notifications_enabled ? 1 : 0.5 }}>
                   <input
                     type="checkbox"
                     checked={profilePrefs.notify_usage}
@@ -6859,8 +6900,7 @@ function App() {
               </p>
               <button
                 type="button"
-                className="btn btn-ghost"
-                style={{ color: '#b91c1c', borderColor: '#fecaca' }}
+                className="profile-danger-btn"
                 disabled={profileSaving}
                 onClick={handleSignOutAllDevices}
               >
@@ -6868,13 +6908,7 @@ function App() {
               </button>
 
               {profileMsg && (
-                <p
-                  style={{
-                    marginTop: 12,
-                    fontSize: 13,
-                    color: profileMsg.type === 'error' ? '#b91c1c' : '#15803d',
-                  }}
-                >
+                <p className={`profile-msg ${profileMsg.type === 'error' ? 'error' : 'success'}`}>
                   {profileMsg.text}
                 </p>
               )}
