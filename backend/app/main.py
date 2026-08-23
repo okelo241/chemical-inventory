@@ -95,8 +95,21 @@ BUCKET_NAME = "sds-files"
 # Public app URL used in invite emails (no trailing slash)
 APP_ORIGIN = (os.getenv("APP_ORIGIN") or os.getenv("FRONTEND_URL") or "https://labchemicalinventory.com").rstrip("/")
 # Optional: send invite emails via Resend (recommended — Supabase default mail is unreliable)
-RESEND_API_KEY = os.getenv("RESEND_API_KEY") or ""
-INVITE_FROM_EMAIL = os.getenv("INVITE_FROM_EMAIL") or "Chemical Inventory <invites@labchemicalinventory.com>"
+def _env_clean(name: str, default: str = "") -> str:
+    v = os.getenv(name) or default
+    v = str(v).strip().strip('"').strip("'")
+    return v
+
+RESEND_API_KEY = _env_clean("RESEND_API_KEY", "")
+# Must use an address on a domain verified in the SAME Resend account as the API key
+INVITE_FROM_EMAIL = _env_clean(
+    "INVITE_FROM_EMAIL",
+    "Chemical Inventory <invites@labchemicalinventory.com>",
+)
+print(
+    f"Email config: RESEND_API_KEY={'set (' + RESEND_API_KEY[:6] + '…)' if RESEND_API_KEY else 'MISSING'}; "
+    f"FROM={INVITE_FROM_EMAIL}"
+)
 
 
 # Columns safe to set on Chemical from API payloads
@@ -466,6 +479,24 @@ def _join_location_from_parts(data: dict) -> Optional[str]:
 @app.get("/")
 def read_root():
     return {"message": "Chemical Inventory API is running"}
+
+
+
+@app.get("/debug/email-config")
+def debug_email_config(user: dict = Depends(get_current_user)):
+    """Shows whether Resend env is loaded (no secrets). Owner/admin only needed for ops."""
+    return {
+        "resend_api_key_set": bool(RESEND_API_KEY),
+        "resend_api_key_prefix": (RESEND_API_KEY[:8] + "…") if RESEND_API_KEY else None,
+        "invite_from_email": INVITE_FROM_EMAIL,
+        "app_origin": APP_ORIGIN,
+        "using_test_sender": "onboarding@resend.dev" in (INVITE_FROM_EMAIL or "").lower(),
+        "hint": (
+            "Set RESEND_API_KEY=re_... and INVITE_FROM_EMAIL="
+            "'Chemical Inventory <invites@labchemicalinventory.com>' "
+            "on the API host, then restart. Domain must be Verified in the same Resend account."
+        ),
+    }
 
 
 @app.get("/health")
@@ -1310,9 +1341,27 @@ def _send_invite_email_resend(
     """
     Send invite email via Resend HTTP API.
     Returns (ok: bool, error: Optional[str]).
+
+    Requires:
+      RESEND_API_KEY = re_...
+      INVITE_FROM_EMAIL = Name <addr@YOUR_VERIFIED_DOMAIN>
+    Domain must be Verified in the same Resend account as the API key.
     """
     if not RESEND_API_KEY:
-        return False, "RESEND_API_KEY not set"
+        return False, "RESEND_API_KEY not set on the API server"
+    if not RESEND_API_KEY.startswith("re_"):
+        return False, "RESEND_API_KEY should start with re_ (check env var value)"
+
+    from_addr = INVITE_FROM_EMAIL
+    # Guard against still using Resend's test sender for third-party inboxes
+    if "onboarding@resend.dev" in from_addr.lower():
+        return (
+            False,
+            "INVITE_FROM_EMAIL is still onboarding@resend.dev. "
+            "Set INVITE_FROM_EMAIL to an address on your verified domain, e.g. "
+            "Chemical Inventory <invites@labchemicalinventory.com>",
+        )
+
     try:
         import urllib.request
         import urllib.error
@@ -1329,7 +1378,7 @@ def _send_invite_email_resend(
             <p style="margin:12px 0 8px;font-size:13px;color:#475569"><strong>Temporary password:</strong></p>
             <p style="margin:0;font-family:ui-monospace,monospace;font-size:16px;font-weight:700;letter-spacing:0.04em">{temp_password}</p>
             <p style="margin:12px 0 0;font-size:12px;color:#64748b;line-height:1.45">
-              After you sign in, open <em>Forgot password</em> (or account settings) to set your own password.
+              After you sign in, use <em>Forgot password</em> to set your own password.
               Keep this email private.
             </p>
           </div>
@@ -1356,14 +1405,16 @@ def _send_invite_email_resend(
           <p style="font-size:12px;color:#94a3b8;word-break:break-all">{invite_link}</p>
         </div>
         """
-        payload = _json.dumps(
-            {
-                "from": INVITE_FROM_EMAIL,
-                "to": [to_email],
-                "subject": subject,
-                "html": html,
-            }
-        ).encode("utf-8")
+        payload_obj = {
+            "from": from_addr,
+            "to": [to_email],
+            "subject": subject,
+            "html": html,
+        }
+        if inviter_email:
+            payload_obj["reply_to"] = inviter_email
+
+        payload = _json.dumps(payload_obj).encode("utf-8")
         req = urllib.request.Request(
             "https://api.resend.com/emails",
             data=payload,
@@ -1373,19 +1424,33 @@ def _send_invite_email_resend(
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=25) as resp:
             body = resp.read().decode("utf-8", errors="replace")
-            if resp.status >= 200 and resp.status < 300:
+            if 200 <= resp.status < 300:
+                print(f"Resend OK to={to_email} from={from_addr} body={body[:200]}")
                 return True, None
-            return False, f"Resend HTTP {resp.status}: {body}"
+            return False, f"Resend HTTP {resp.status}: {body} (from={from_addr})"
     except urllib.error.HTTPError as e:
         try:
             body = e.read().decode("utf-8", errors="replace")
         except Exception:
             body = ""
-        return False, f"HTTP Error {e.code}: {e.reason} {body}".strip()
+        msg = f"HTTP Error {e.code}: {e.reason} {body}".strip()
+        print(f"Resend FAIL to={to_email} from={from_addr}: {msg}")
+        # Helpful hints
+        if e.code == 403:
+            msg += (
+                " | Hint: 403 usually means the API key is invalid, from a different Resend account, "
+                "or the From address is not on a domain verified in that account. "
+                f"Current FROM={from_addr}"
+            )
+        elif e.code == 422:
+            msg += " | Hint: 422 = invalid From/To format or domain not allowed."
+        return False, msg
     except Exception as e:
+        print("Resend exception:", repr(e))
         return False, str(e)
+
 
 
 def _supabase_send_invite_email(email: str, invite_link: str, meta: dict) -> tuple:
