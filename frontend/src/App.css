@@ -127,9 +127,9 @@ a {
 
 /* ==================== APP LAYOUT ==================== */
 .app {
-  max-width: 1400px;
+  max-width: 1600px;
   margin: 0 auto;
-  padding: 24px 24px 80px;
+  padding: 16px 20px 72px;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
@@ -5733,4 +5733,184 @@ textarea {
 [data-theme="dark"] .header-menu-item:hover {
   background: #243044 !important;
   color: #ffffff !important;
+}
+
+
+/* ==================== INVENTORY TOOLBAR (compact) ==================== */
+.inventory-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 4px 0 14px;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.inventory-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.inventory-toolbar-row--main {
+  justify-content: space-between;
+}
+
+.inventory-search {
+  flex: 1 1 280px;
+  min-width: 200px;
+  max-width: 520px;
+}
+
+.inventory-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.inventory-toolbar-row--filters {
+  gap: 8px;
+  padding-top: 2px;
+  border-top: 1px solid var(--border);
+}
+
+.filter-pills--primary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  flex: 1 1 auto;
+}
+
+.filter-pills--primary .pill {
+  padding: 6px 12px;
+  font-size: 0.8125rem;
+}
+
+.filter-pills--primary .pill-icon {
+  font-size: 0.9em;
+}
+
+@media (max-width: 720px) {
+  .filter-pills--primary .pill-label {
+    /* keep labels; stack naturally via wrap */
+  }
+}
+
+.more-filters-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.more-filters-btn {
+  gap: 6px;
+}
+
+.more-filters-caret {
+  font-size: 0.7rem;
+  opacity: 0.8;
+}
+
+.more-filters-badge {
+  margin-left: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--primary);
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.more-filters-btn.active .more-filters-badge {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+
+.more-filters-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 200px;
+  z-index: 40;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.18);
+}
+
+[data-theme="dark"] .more-filters-menu {
+  background: #151d2e;
+  border-color: #334155;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+.more-filters-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.875rem;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+
+.more-filters-item:hover {
+  background: var(--bg-alt, var(--bg));
+}
+
+.more-filters-item.active {
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.more-filters-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+.inventory-toolbar .sort-select {
+  padding: 8px 12px;
+  font-size: 0.8125rem;
+  max-width: 148px;
+  border-radius: 10px;
+}
+
+.inventory-toolbar .btn-sm {
+  padding: 7px 12px;
+  font-size: 0.8125rem;
+}
+
+/* Table uses full width of content shell */
+.table-wrapper,
+.chem-table {
+  width: 100%;
+}
+
+@media (max-width: 900px) {
+  .inventory-toolbar-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+  .inventory-search {
+    max-width: none;
+    flex: 1 1 100%;
+  }
 }

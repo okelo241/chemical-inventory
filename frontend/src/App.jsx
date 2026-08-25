@@ -227,6 +227,12 @@ const FILTER_PRESETS = [
   { id: 'disposed', label: 'Disposed', icon: '🗑️' },
 ]
 
+const PRIMARY_FILTER_IDS = ['all', 'low', 'soon', 'no-sds', 'peroxide']
+const MORE_FILTER_IDS = ['expired', 'in_stock', 'in_use', 'empty', 'disposed']
+const PRIMARY_FILTERS = FILTER_PRESETS.filter((p) => PRIMARY_FILTER_IDS.includes(p.id))
+const MORE_FILTERS = FILTER_PRESETS.filter((p) => MORE_FILTER_IDS.includes(p.id))
+
+
 /** Lifecycle options for containers (CASRAI-aligned) */
 const LIFECYCLE_OPTIONS = [
   { id: 'in_stock', label: 'In stock', hint: 'Unopened or full inventory' },
@@ -1316,6 +1322,7 @@ function App() {
   /* ---------- UI controls ---------- */
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
+  const [moreFiltersOpen, setMoreFiltersOpen] = useState(false)
   const [sortBy, setSortBy] = useState('name')
   const [viewMode, setViewMode] = useState(() => localStorage.getItem('viewMode') || 'table')
   const [mainView, setMainView] = useState('inventory')
@@ -6025,144 +6032,217 @@ const compatibilityIssues = useMemo(
             {refreshing && <div className="refresh-indicator">Refreshing…</div>}
           </div>
 
-          {/* Toolbar */}
-          <div className="toolbar">
-            <div className="search-wrapper">
-              <span className="search-icon">🔍</span>
-              <input
-                ref={searchRef}
-                className="search-input"
-                placeholder="Search name, CAS, formula, barcode, location…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              {search && (
-                <button className="clear-btn" onClick={() => setSearch('')}>
-                  ✕
-                </button>
-              )}
-            </div>
-
-            <div className="filter-pills">
-              {FILTER_PRESETS.map((preset) => (
-                <button
-                  key={preset.id}
-                  className={`pill ${filter === preset.id ? 'active' : ''}`}
-                  onClick={() => setFilter(preset.id)}
-                >
-                  <span>{preset.icon}</span> {preset.label}
-                </button>
-              ))}
-            </div>
-
-            <select
-              className="sort-select"
-              value={locationFilter}
-              onChange={(e) => setLocationFilter(e.target.value)}
-            >
-              <option value="">All Locations</option>
-              {locations.map((loc) => (
-                <option key={loc} value={loc}>
-                  {loc}
-                </option>
-              ))}
-            </select>
-
-            <select
-              className="sort-select"
-              value={hazardFilter}
-              onChange={(e) => setHazardFilter(e.target.value)}
-            >
-              <option value="">All Hazards</option>
-              {HAZARD_OPTIONS.map((h) => (
-                <option key={h.id} value={h.id}>
-                  {h.label}
-                </option>
-              ))}
-            </select>
-
-            <div className="toolbar-right">
-              <select className="sort-select" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-                {SORT_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-
-              <div className="view-toggle">
-                <button
-                  className={viewMode === 'table' ? 'active' : ''}
-                  onClick={() => setViewMode('table')}
-                >
-                  ☰
-                </button>
-                <button
-                  className={viewMode === 'cards' ? 'active' : ''}
-                  onClick={() => setViewMode('cards')}
-                >
-                  ▦
-                </button>
+          {/* Toolbar — compact LIMS layout */}
+          <div className="inventory-toolbar">
+            <div className="inventory-toolbar-row inventory-toolbar-row--main">
+              <div className="search-wrapper inventory-search">
+                <span className="search-icon">🔍</span>
+                <input
+                  ref={searchRef}
+                  className="search-input"
+                  placeholder="Search name, CAS, formula, barcode, location…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+                {search && (
+                  <button type="button" className="clear-btn" onClick={() => setSearch('')}>
+                    ✕
+                  </button>
+                )}
               </div>
 
-              <div className="export-wrapper" ref={exportRef}>
-                <button className="btn btn-ghost" onClick={() => setExportOpen((v) => !v)}>
-                  ⬇ Export
+              <div className="inventory-toolbar-actions">
+                <select
+                  className="sort-select"
+                  value={locationFilter}
+                  onChange={(e) => setLocationFilter(e.target.value)}
+                  aria-label="Filter by location"
+                >
+                  <option value="">All Locations</option>
+                  {locations.map((loc) => (
+                    <option key={loc} value={loc}>
+                      {loc}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  className="sort-select"
+                  value={hazardFilter}
+                  onChange={(e) => setHazardFilter(e.target.value)}
+                  aria-label="Filter by hazard"
+                >
+                  <option value="">All Hazards</option>
+                  {HAZARD_OPTIONS.map((h) => (
+                    <option key={h.id} value={h.id}>
+                      {h.label}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  className="sort-select"
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value)}
+                  aria-label="Sort"
+                >
+                  {SORT_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+
+                <div className="view-toggle" role="group" aria-label="View mode">
+                  <button
+                    type="button"
+                    className={viewMode === 'table' ? 'active' : ''}
+                    onClick={() => setViewMode('table')}
+                    title="Table view"
+                  >
+                    ☰
+                  </button>
+                  <button
+                    type="button"
+                    className={viewMode === 'cards' ? 'active' : ''}
+                    onClick={() => setViewMode('cards')}
+                    title="Card view"
+                  >
+                    ▦
+                  </button>
+                </div>
+
+                <div className="export-wrapper" ref={exportRef}>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setExportOpen((v) => !v)}
+                  >
+                    ⬇ Export
+                  </button>
+                  {exportOpen && (
+                    <div className="export-dropdown">
+                      <button type="button" onClick={handleExportCurrent}>
+                        Export Current (CSV)
+                      </button>
+                      <button type="button" onClick={handleExportAll}>
+                        Export All (CSV)
+                      </button>
+                      <button type="button" onClick={handleExportTransactions}>
+                        Export Usage (CSV)
+                      </button>
+                      <div className="export-divider" />
+                      <button type="button" onClick={handleExportPDF}>
+                        PDF (Current)
+                      </button>
+                      <button type="button" onClick={handleExportPDFAll}>
+                        PDF (All)
+                      </button>
+                      <div className="export-divider" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExportOpen(false)
+                          csvImportRef.current?.click()
+                        }}
+                      >
+                        Import CSV…
+                      </button>
+                    </div>
+                  )}
+                  <input
+                    ref={csvImportRef}
+                    type="file"
+                    accept=".csv,text/csv"
+                    hidden
+                    onChange={(e) => {
+                      const f = e.target.files?.[0]
+                      if (f) handleImportCSV(f)
+                    }}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  className={`btn btn-ghost btn-sm ${bulkMode ? 'active' : ''}`}
+                  onClick={() => {
+                    setBulkMode((v) => !v)
+                    if (bulkMode) setSelectedIds(new Set())
+                  }}
+                >
+                  {bulkMode ? 'Cancel' : 'Select'}
                 </button>
-                {exportOpen && (
-                  <div className="export-dropdown">
-                    <button type="button" onClick={handleExportCurrent}>
-                      Export Current (CSV)
-                    </button>
-                    <button type="button" onClick={handleExportAll}>
-                      Export All (CSV)
-                    </button>
-                    <button type="button" onClick={handleExportTransactions}>
-                      Export Usage (CSV)
-                    </button>
-                    <div className="export-divider" />
-                    <button type="button" onClick={handleExportPDF}>
-                      PDF (Current)
-                    </button>
-                    <button type="button" onClick={handleExportPDFAll}>
-                      PDF (All)
-                    </button>
-                    <div className="export-divider" />
+              </div>
+            </div>
+
+            <div className="inventory-toolbar-row inventory-toolbar-row--filters">
+              <div className="filter-pills filter-pills--primary">
+                {PRIMARY_FILTERS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    className={`pill ${filter === preset.id ? 'active' : ''}`}
+                    onClick={() => {
+                      setFilter(preset.id)
+                      setMoreFiltersOpen(false)
+                    }}
+                  >
+                    <span className="pill-icon">{preset.icon}</span>
+                    <span className="pill-label">{preset.label}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="more-filters-wrap">
+                <button
+                  type="button"
+                  className={`pill more-filters-btn ${
+                    MORE_FILTER_IDS.includes(filter) ? 'active' : ''
+                  }`}
+                  onClick={() => setMoreFiltersOpen((v) => !v)}
+                  aria-expanded={moreFiltersOpen}
+                >
+                  More filters
+                  <span className="more-filters-caret">{moreFiltersOpen ? '▴' : '▾'}</span>
+                  {MORE_FILTER_IDS.includes(filter) && (
+                    <span className="more-filters-badge">
+                      {FILTER_PRESETS.find((p) => p.id === filter)?.label || filter}
+                    </span>
+                  )}
+                </button>
+                {moreFiltersOpen && (
+                  <div className="more-filters-menu" role="menu">
+                    {MORE_FILTERS.map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        role="menuitem"
+                        className={`more-filters-item ${filter === preset.id ? 'active' : ''}`}
+                        onClick={() => {
+                          setFilter(preset.id)
+                          setMoreFiltersOpen(false)
+                        }}
+                      >
+                        <span>{preset.icon}</span> {preset.label}
+                      </button>
+                    ))}
+                    <div className="more-filters-divider" />
                     <button
                       type="button"
+                      role="menuitem"
+                      className="more-filters-item"
                       onClick={() => {
-                        setExportOpen(false)
-                        csvImportRef.current?.click()
+                        setFilter('all')
+                        setLocationFilter('')
+                        setHazardFilter('')
+                        setMoreFiltersOpen(false)
                       }}
                     >
-                      Import CSV…
+                      Clear filters
                     </button>
                   </div>
                 )}
-                <input
-                  ref={csvImportRef}
-                  type="file"
-                  accept=".csv,text/csv"
-                  hidden
-                  onChange={(e) => {
-                    const f = e.target.files?.[0]
-                    if (f) handleImportCSV(f)
-                  }}
-                />
               </div>
-
-              <button
-                className={`btn btn-ghost ${bulkMode ? 'active' : ''}`}
-                onClick={() => {
-                  setBulkMode((v) => !v)
-                  if (bulkMode) setSelectedIds(new Set())
-                }}
-              >
-                {bulkMode ? 'Cancel Select' : 'Select'}
-              </button>
-              <button className="icon-btn" onClick={() => setHazardLegendOpen(true)}>
-                ℹ️
-              </button>
             </div>
           </div>
 
