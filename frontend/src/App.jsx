@@ -1424,6 +1424,41 @@ function App() {
   const [wasteForm, setWasteForm] = useState({ chemical_id: '', quantity: '', unit: 'g', reason: '', notes: '' })
   const [showDeleteAccount, setShowDeleteAccount] = useState(false)
   const [showProfileModal, setShowProfileModal] = useState(false)
+
+  /* Phase A/B/C operational state */
+  const [reconChecks, setReconChecks] = useState({})
+  const [showReceiveWizard, setShowReceiveWizard] = useState(false)
+  const [showDisposeWizard, setShowDisposeWizard] = useState(false)
+  const [showTransferWizard, setShowTransferWizard] = useState(false)
+  const [disposeChemId, setDisposeChemId] = useState('')
+  const [transferChemId, setTransferChemId] = useState('')
+  const [transferDest, setTransferDest] = useState('')
+  const [transferNotes, setTransferNotes] = useState('')
+  const [disposeReason, setDisposeReason] = useState('empty')
+  const [disposeNotes, setDisposeNotes] = useState('')
+  const [casThresholds, setCasThresholds] = useState(() =>
+    loadJsonStorage(CAS_THRESHOLDS_KEY, {})
+  )
+  const [thresholdDraftCas, setThresholdDraftCas] = useState('')
+  const [thresholdDraftValue, setThresholdDraftValue] = useState('')
+  const [limsWebhookUrl, setLimsWebhookUrl] = useState(() => {
+    try {
+      return localStorage.getItem(LIMS_WEBHOOK_KEY) || ''
+    } catch {
+      return ''
+    }
+  })
+  const [prop65List, setProp65List] = useState(() => {
+    const saved = loadJsonStorage(REGULATORY_FLAGS_KEY, null)
+    if (Array.isArray(saved) && saved.length) return saved
+    return [...PROP65_SEED_CAS]
+  })
+  const [prop65Draft, setProp65Draft] = useState('')
+  const [showPoImport, setShowPoImport] = useState(false)
+  const [poImportText, setPoImportText] = useState('')
+  const [poImportBusy, setPoImportBusy] = useState(false)
+  const [ssoBusy, setSsoBusy] = useState(false)
+
   const [profileName, setProfileName] = useState('')
   const [profileAvatar, setProfileAvatar] = useState('')
   const [profileCurrentPassword, setProfileCurrentPassword] = useState('')
