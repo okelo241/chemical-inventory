@@ -115,11 +115,15 @@ print(
 # Columns safe to set on Chemical from API payloads
 CHEMICAL_WRITE_FIELDS = {
     "name", "cas_number", "quantity", "unit", "location",
-    "loc_building", "loc_room", "loc_cabinet", "loc_shelf",
+    "loc_site", "loc_building", "loc_room", "loc_cabinet", "loc_shelf",
     "expiry_date", "min_stock", "hazard_notes", "molecular_formula",
     "hazard_symbols", "chemical_classes", "batch_lot", "supplier", "barcode",
     "container_code", "parent_chemical_id", "sds_reviewed_at", "sds_review_months",
     "archived", "in_collection", "organization_id", "lab_unit_id",
+    # Batch 2 — persistent compliance / lifecycle fields
+    "sds_url", "date_received", "date_opened", "peroxide_test_due",
+    "lifecycle_status", "provisional", "signal_word", "h_statements",
+    "inventory_owner",
 }
 
 
@@ -220,6 +224,16 @@ def chemical_to_dict(r: Any) -> dict:
         "organization_id": _id_str(org_id),
         "lab_unit_id": _id_str(lab_id),
         "sds_filename": getattr(r, "sds_filename", None),
+        "sds_url": getattr(r, "sds_url", None),
+        "date_received": _as_date_iso(getattr(r, "date_received", None)),
+        "date_opened": _as_date_iso(getattr(r, "date_opened", None)),
+        "peroxide_test_due": _as_date_iso(getattr(r, "peroxide_test_due", None)),
+        "lifecycle_status": getattr(r, "lifecycle_status", None) or "in_stock",
+        "provisional": bool(getattr(r, "provisional", False)),
+        "signal_word": getattr(r, "signal_word", None),
+        "h_statements": getattr(r, "h_statements", None),
+        "inventory_owner": getattr(r, "inventory_owner", None),
+        "loc_site": getattr(r, "loc_site", None),
         "user_id": _id_str(uid),
         "created_at": _as_datetime_iso(getattr(r, "created_at", None)),
         "updated_at": _as_datetime_iso(getattr(r, "updated_at", None)),
@@ -452,6 +466,18 @@ def write_audit(
         print("audit write skipped:", e)
 
 
+
+def _apply_chemical_fields(db_obj: Any, data: dict) -> None:
+    """Set only attributes that exist on the SQLAlchemy model (schema-tolerant)."""
+    for key, value in data.items():
+        if key == "organization_id":
+            value = _parse_uuid(value)
+        if hasattr(db_obj, key):
+            try:
+                setattr(db_obj, key, value)
+            except Exception as e:
+                print(f"skip field {key}:", e)
+
 def _filter_chemical_payload(data: dict) -> dict:
     out = {k: v for k, v in data.items() if k in CHEMICAL_WRITE_FIELDS}
     # Drop keys for columns that may not exist yet on older DBs — setattr will still work if model has them
@@ -460,6 +486,7 @@ def _filter_chemical_payload(data: dict) -> dict:
 
 def _join_location_from_parts(data: dict) -> Optional[str]:
     parts = [
+        (data.get("loc_site") or "").strip(),
         (data.get("loc_building") or "").strip(),
         (data.get("loc_room") or "").strip(),
         (data.get("loc_cabinet") or "").strip(),
@@ -639,8 +666,9 @@ def update_chemical(
     if "lab_unit_id" in update_data:
         update_data["lab_unit_id"] = _parse_uuid(update_data.get("lab_unit_id"))
 
-    if any(k in update_data for k in ("loc_building", "loc_room", "loc_cabinet", "loc_shelf")):
+    if any(k in update_data for k in ("loc_site", "loc_building", "loc_room", "loc_cabinet", "loc_shelf")):
         merged = {
+            "loc_site": update_data.get("loc_site", getattr(db_chemical, "loc_site", None)),
             "loc_building": update_data.get("loc_building", getattr(db_chemical, "loc_building", None)),
             "loc_room": update_data.get("loc_room", getattr(db_chemical, "loc_room", None)),
             "loc_cabinet": update_data.get("loc_cabinet", getattr(db_chemical, "loc_cabinet", None)),
@@ -2220,6 +2248,89 @@ def get_transactions(
     ]
 
 
+
+def notify_org_admins_usage(
+    db: Session,
+    *,
+    organization_id,
+    actor_email: Optional[str],
+    chemical_name: Optional[str],
+    tx_type: str,
+    quantity_change: Any,
+    unit: Optional[str],
+    quantity_after: Any,
+) -> None:
+    """Best-effort email to org owners/admins when a member logs usage."""
+    if not organization_id or not RESEND_API_KEY:
+        return
+    try:
+        import urllib.request
+        import json as _json
+
+        members = (
+            db.query(models.OrganizationMember)
+            .filter(models.OrganizationMember.organization_id == organization_id)
+            .all()
+        )
+        admin_ids = [
+            str(m.user_id)
+            for m in members
+            if str(getattr(m, "role", "") or "").lower() in ("owner", "admin")
+        ]
+        if not admin_ids:
+            return
+        # Resolve emails from membership if stored, else skip unknown
+        emails = set()
+        for m in members:
+            role = str(getattr(m, "role", "") or "").lower()
+            if role not in ("owner", "admin"):
+                continue
+            em = getattr(m, "email", None) or getattr(m, "user_email", None)
+            if em:
+                emails.add(str(em).strip().lower())
+        # Always try actor exclusion
+        actor = (actor_email or "").strip().lower()
+        emails = {e for e in emails if e and e != actor}
+        if not emails:
+            return
+        qty = quantity_change if quantity_change is not None else ""
+        unit_s = unit or ""
+        after = quantity_after if quantity_after is not None else "—"
+        subject = f"[Lab Inventory] Usage: {chemical_name or 'chemical'}"
+        body = (
+            f"<p><strong>{actor or 'A member'}</strong> logged "
+            f"<strong>{tx_type}</strong> on <strong>{chemical_name or 'a chemical'}</strong>.</p>"
+            f"<p>Quantity change: <strong>{qty} {unit_s}</strong><br/>"
+            f"Remaining: <strong>{after} {unit_s}</strong></p>"
+            f"<p style='color:#64748b;font-size:13px'>Open your lab workspace to review full history.</p>"
+        )
+        for to in list(emails)[:8]:
+            payload = _json.dumps(
+                {
+                    "from": INVITE_FROM_EMAIL,
+                    "to": [to],
+                    "subject": subject,
+                    "html": body,
+                }
+            ).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.resend.com/emails",
+                data=payload,
+                headers={
+                    "Authorization": f"Bearer {RESEND_API_KEY}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "LabChemicalInventory/1.0",
+                },
+                method="POST",
+            )
+            try:
+                urllib.request.urlopen(req, timeout=12)
+            except Exception as e:
+                print("usage notify email failed:", to, e)
+    except Exception as e:
+        print("notify_org_admins_usage skipped:", e)
+
+
 @app.post("/transactions")
 def create_transaction(
     payload: dict,
@@ -2267,6 +2378,20 @@ def create_transaction(
             "notes": payload.get("notes"),
         },
     )
+
+    try:
+        notify_org_admins_usage(
+            db,
+            organization_id=org_uuid,
+            actor_email=user.get("email") or payload.get("user_email"),
+            chemical_name=payload.get("chemical_name"),
+            tx_type=str(payload.get("type") or "take"),
+            quantity_change=payload.get("quantity_change"),
+            unit=payload.get("unit"),
+            quantity_after=payload.get("quantity_after"),
+        )
+    except Exception as e:
+        print("usage email notify error:", e)
 
     return {
         "id": str(row.id),

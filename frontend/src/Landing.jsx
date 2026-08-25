@@ -58,6 +58,32 @@ function Landing({ onGetStarted }) {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  const startWith = (intent = 'personal') => {
+    try {
+      localStorage.setItem(
+        'workspaceIntent',
+        JSON.stringify({
+          type: intent === 'organization' ? 'organization' : 'personal',
+          organizationName: '',
+          organizationSlug: '',
+          inviteToken: null,
+          at: new Date().toISOString(),
+        })
+      )
+      localStorage.setItem(
+        'workspace',
+        JSON.stringify(
+          intent === 'organization'
+            ? { mode: 'organization', organization_id: null }
+            : { mode: 'personal', organization_id: null }
+        )
+      )
+    } catch {
+      /* ignore */
+    }
+    onGetStarted?.(intent)
+  }
+
   return (
     <div className="landing">
       {/* ===================== NAVBAR ===================== */}
@@ -167,6 +193,7 @@ function Landing({ onGetStarted }) {
           <span>Chemical Inventory</span>
         </div>
         <div className="nav-links">
+          <a href="#product">Product</a>
           <a href="#features">Features</a>
           <a href="#storage-guide">Storage Guide</a>
           <a href="#safety-measures">Safety Measures</a>
@@ -210,22 +237,174 @@ function Landing({ onGetStarted }) {
             incompatible storage, monitors expiry dates, and helps your lab stay aligned with GHS,
             OSHA laboratory practices, and good chemical hygiene.
           </p>
-          <div className="hero-actions">
-            <button className="btn btn-primary btn-xl" onClick={onGetStarted}>
-              Start Free Account →
+          <div className="hero-actions hero-actions--dual">
+            <button
+              type="button"
+              className="btn btn-primary btn-xl"
+              onClick={() => startWith('personal')}
+            >
+              Start personal inventory →
             </button>
             <button
+              type="button"
               className="btn btn-outline btn-xl"
+              onClick={() => startWith('organization')}
+            >
+              Set up a lab / organization
+            </button>
+          </div>
+          <p className="hero-note">
+            Free for individuals · Organization workspaces for teams · No credit card
+          </p>
+          <div className="hero-cta-pills">
+            <button
+              type="button"
+              className="hero-pill"
+              onClick={() =>
+                document.getElementById('product')?.scrollIntoView({ behavior: 'smooth' })
+              }
+            >
+              See product →
+            </button>
+            <button
+              type="button"
+              className="hero-pill hero-pill--ghost"
               onClick={() =>
                 document.getElementById('safety-measures')?.scrollIntoView({ behavior: 'smooth' })
               }
             >
-              Explore Safety Measures
+              Safety guidance
             </button>
           </div>
-          <p className="hero-note">
-            Free for individual use · No credit card required · Private by design
-          </p>
+        </div>
+      </section>
+
+      {/* ===================== PRODUCT PREVIEW ===================== */}
+      <section id="product" className="product-section">
+        <div className="section-inner">
+          <div className="section-header" style={{ textAlign: 'center' }}>
+            <h2>See the product</h2>
+            <p className="section-lead">
+              Inventory, compliance, and org workspaces — designed for daily lab use, not spreadsheets.
+            </p>
+          </div>
+
+          <div className="product-shots">
+            <article className="product-shot">
+              <div className="product-shot-frame">
+                <img
+                  className="product-shot-img"
+                  src="/screenshots/inventory.png"
+                  alt="Chemical inventory table with search, SDS, and actions"
+                  loading="lazy"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none'
+                    const fb = e.currentTarget.nextElementSibling
+                    if (fb) fb.hidden = false
+                  }}
+                />
+                <div className="mock-window" hidden>
+                  <div className="mock-titlebar">
+                    <span /><span /><span />
+                    <em>Inventory</em>
+                  </div>
+                  <div className="mock-body">
+                    <div className="mock-stats">
+                      <i /><i /><i /><i />
+                    </div>
+                    <div className="mock-toolbar" />
+                    <div className="mock-table">
+                      <div className="mock-row mock-row--head" />
+                      <div className="mock-row" />
+                      <div className="mock-row" />
+                      <div className="mock-row" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <h3>Inventory table</h3>
+              <p>Search, filter by hazard or SDS gaps, log usage, and keep actions in a clean row menu.</p>
+            </article>
+
+            <article className="product-shot">
+              <div className="product-shot-frame">
+                <img
+                  className="product-shot-img"
+                  src="/screenshots/compliance.png"
+                  alt="Compliance workspace with SDS and peroxide watchlists"
+                  loading="lazy"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none'
+                    const fb = e.currentTarget.nextElementSibling
+                    if (fb) fb.hidden = false
+                  }}
+                />
+                <div className="mock-window mock-window--compliance" hidden>
+                  <div className="mock-titlebar">
+                    <span /><span /><span />
+                    <em>Compliance</em>
+                  </div>
+                  <div className="mock-body">
+                    <div className="mock-chips">
+                      <i className="on" /><i /><i />
+                    </div>
+                    <div className="mock-card" />
+                    <div className="mock-card mock-card--sm" />
+                  </div>
+                </div>
+              </div>
+              <h3>Compliance workspace</h3>
+              <p>Missing SDS, peroxide watch, CAS rollups, and exports for emergency readiness.</p>
+            </article>
+
+            <article className="product-shot">
+              <div className="product-shot-frame">
+                <img
+                  className="product-shot-img"
+                  src="/screenshots/organization.png"
+                  alt="Organization workspace with members and invites"
+                  loading="lazy"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none'
+                    const fb = e.currentTarget.nextElementSibling
+                    if (fb) fb.hidden = false
+                  }}
+                />
+                <div className="mock-window mock-window--org" hidden>
+                  <div className="mock-titlebar">
+                    <span /><span /><span />
+                    <em>Organization</em>
+                  </div>
+                  <div className="mock-body">
+                    <div className="mock-org-banner" />
+                    <div className="mock-members">
+                      <i /><i /><i />
+                    </div>
+                    <div className="mock-invite" />
+                  </div>
+                </div>
+              </div>
+              <h3>Lab / organization</h3>
+              <p>Invite members, roles, shared inventory — personal collections stay private.</p>
+            </article>
+          </div>
+
+          <div className="product-cta-row">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => startWith('personal')}
+            >
+              Continue as individual
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={() => startWith('organization')}
+            >
+              Continue as lab team
+            </button>
+          </div>
         </div>
       </section>
 
@@ -1344,9 +1523,22 @@ function Landing({ onGetStarted }) {
             Stop relying on spreadsheets and memory. Start with a system built for the way laboratories
             actually work — inventory, SDS, hazards, and safer storage decisions in one place.
           </p>
-          <button className="btn btn-primary btn-xl" onClick={onGetStarted}>
-            Create Your Free Account
-          </button>
+          <div className="final-cta-actions">
+            <button
+              type="button"
+              className="btn btn-primary btn-xl"
+              onClick={() => startWith('personal')}
+            >
+              Personal account
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline btn-xl final-cta-outline"
+              onClick={() => startWith('organization')}
+            >
+              Lab / organization
+            </button>
+          </div>
           <p className="cta-note">No credit card · Private accounts · Built for chemists</p>
         </div>
       </section>
@@ -1365,7 +1557,8 @@ function Landing({ onGetStarted }) {
             <a href="#ghs">GHS</a>
             <a href="#emergency">Emergency</a>
             <a href="#faq">FAQ</a>
-            <button className="footer-btn" onClick={onGetStarted}>
+            <a href="#product">Product</a>
+            <button type="button" className="footer-btn" onClick={() => startWith('personal')}>
               Get Started
             </button>
           </div>

@@ -249,6 +249,36 @@ const hasSdsRecord = (chemical, meta = {}) => {
   return false
 }
 
+/** Resolved SDS presentation for table / menus */
+const resolveSdsInfo = (chemical) => {
+  if (!chemical) return { kind: 'none', label: 'No SDS', url: null, filename: null }
+  const meta = typeof getChemMeta === 'function' ? getChemMeta(chemical.id) : {}
+  const url = (chemical.sds_url || meta.sds_url || '').trim() || null
+  const filename = chemical.sds_filename || meta.sds_filename || null
+  const provisional = Boolean(chemical.provisional ?? meta.provisional)
+  if (filename) {
+    return {
+      kind: 'file',
+      label: 'View SDS',
+      url,
+      filename,
+      provisional,
+    }
+  }
+  if (url) {
+    const isPubchem = /pubchem\.ncbi/i.test(url)
+    return {
+      kind: isPubchem ? 'ref' : 'url',
+      label: isPubchem ? 'PubChem' : 'Open SDS',
+      url,
+      filename: null,
+      provisional: provisional || isPubchem,
+    }
+  }
+  return { kind: 'none', label: 'Upload', url: null, filename: null, provisional }
+}
+
+
 const isPeroxideWatchItem = (chemical) => {
   try {
     const classes = resolveEffectiveClasses(chemical) || []
@@ -2080,6 +2110,26 @@ function App() {
   // initialization" in production). Data loading runs in the API-layer effects below.
 
   /* ======================================================================== */
+  useEffect(() => {
+    try {
+      const mq = window.matchMedia('(max-width: 768px)')
+      const apply = () => {
+        const narrow = !!mq.matches
+        setIsNarrowScreen(narrow)
+        if (narrow) setViewMode('cards')
+      }
+      apply()
+      if (mq.addEventListener) mq.addEventListener('change', apply)
+      else mq.addListener(apply)
+      return () => {
+        if (mq.removeEventListener) mq.removeEventListener('change', apply)
+        else mq.removeListener(apply)
+      }
+    } catch {
+      return undefined
+    }
+  }, [])
+
   /* Close row action menu on outside click / Escape */
   useEffect(() => {
     if (!actionMenuId) return undefined
@@ -3573,10 +3623,14 @@ const compatibilityIssues = useMemo(
   const queueServerAudit = async (action, detail = {}) => {
     // Best-effort POST; always keep local pushAudit
     pushAudit(action, detail)
+    const detailObj =
+      detail && typeof detail === 'object' && !Array.isArray(detail) ? { ...detail } : { value: detail }
     const payload = {
       action,
-      detail,
+      detail: detailObj,
       organization_id: activeOrgId || null,
+      chemical_id: detailObj.chemical_id ?? null,
+      chemical_name: detailObj.chemical_name ?? null,
       at: new Date().toISOString(),
       source: 'labchemicalinventory',
     }
@@ -4038,6 +4092,30 @@ const compatibilityIssues = useMemo(
           : null,
         barcode: barcode || null,
         organization_id: workspaceMode === 'organization' ? activeOrgId : null,
+        // Batch 2 — persist on server when columns exist
+        loc_site: formData.loc_site?.trim() || null,
+        loc_building: formData.loc_building?.trim() || null,
+        loc_room: formData.loc_room?.trim() || null,
+        loc_cabinet: formData.loc_cabinet?.trim() || null,
+        loc_shelf: formData.loc_shelf?.trim() || null,
+        sds_url: formData.sds_url?.trim() || null,
+        date_received: formData.date_received || null,
+        date_opened: formData.date_opened || null,
+        peroxide_test_due: formData.peroxide_test_due || null,
+        lifecycle_status: formData.lifecycle_status || 'in_stock',
+        provisional: (() => {
+          const realSds =
+            Boolean((formData.sds_filename || '').trim()) ||
+            (Boolean((formData.sds_url || '').trim()) &&
+              !/pubchem\.ncbi/i.test(formData.sds_url || ''))
+          if (realSds) return false
+          return Boolean(formData.provisional)
+        })(),
+        signal_word: formData.signal_word || null,
+        h_statements: formData.h_statements?.trim() || null,
+        inventory_owner: formData.inventory_owner?.trim() || null,
+        sds_reviewed_at: formData.sds_reviewed_at || null,
+        container_code: formData.container_code?.trim() || null,
       }
 
       const url = editingId
@@ -4075,17 +4153,26 @@ const compatibilityIssues = useMemo(
           sds_filename: formData.sds_filename || undefined,
           inventory_owner: formData.inventory_owner || undefined,
           pubchem_url: formData.pubchem_url || undefined,
-          provisional: Boolean(formData.provisional),
+          provisional: (() => {
+            const realSds =
+              Boolean((formData.sds_filename || '').trim()) ||
+              (Boolean((formData.sds_url || '').trim()) &&
+                !/pubchem\.ncbi/i.test(formData.sds_url || ''))
+            if (realSds) return false
+            return Boolean(formData.provisional)
+          })(),
           signal_word: formData.signal_word || undefined,
           h_statements: formData.h_statements || undefined,
           peroxide_test_due: formData.peroxide_test_due || undefined,
           loc_site: formData.loc_site || undefined,
         })
       }
-      pushAudit(editingId ? 'chemical_update' : 'chemical_create', {
+      await queueServerAudit(editingId ? 'chemical_update' : 'chemical_create', {
         chemical_id: savedId,
         chemical_name: payload.name,
         location: locationJoined,
+        lifecycle_status: payload.lifecycle_status,
+        provisional: payload.provisional,
       })
       showMessage('success', editingId ? 'Chemical updated successfully' : 'Chemical added successfully')
       resetForm()
@@ -4184,7 +4271,16 @@ const compatibilityIssues = useMemo(
       clearInterval(progressInterval)
       setUploadProgress((prev) => ({ ...prev, [chemicalId]: 100 }))
       if (!response.ok) throw new Error('Upload failed')
-      showMessage('success', 'SDS file uploaded successfully')
+      // Manufacturer PDF on file → no longer provisional
+      try {
+        setChemMeta(chemicalId, {
+          provisional: false,
+          sds_reviewed_at: new Date().toISOString().slice(0, 10),
+        })
+      } catch {
+        /* ignore */
+      }
+      showMessage('success', 'SDS uploaded — provisional flag cleared')
       setTimeout(() => {
         setUploadProgress((prev) => {
           const next = { ...prev }
@@ -4997,6 +5093,9 @@ const compatibilityIssues = useMemo(
   // Anyone in an org who is not admin/owner is treated as a restricted member
   const isOrgMemberOnly =
     isOrgWorkspace && roleLower !== 'admin' && roleLower !== 'owner'
+  const effectiveViewMode =
+    isNarrowScreen && viewMode === 'table' ? 'cards' : viewMode
+
   const canManageOrg = isOrgWorkspace
     ? roleLower === 'admin' || roleLower === 'owner'
     : true
@@ -5038,7 +5137,14 @@ const compatibilityIssues = useMemo(
         inviteOrgSlug={inviteOrgSlug}
         forceReset={(() => {
           try {
-            return sessionStorage.getItem('authRecovery') === '1'
+            if (sessionStorage.getItem('authRecovery') === '1') return true
+            const search = window.location.search || ''
+            const hash = window.location.hash || ''
+            return (
+              search.includes('type=recovery') ||
+              hash.includes('type=recovery') ||
+              (hash.includes('access_token') && hash.includes('type=recovery'))
+            )
           } catch {
             return false
           }
@@ -5623,20 +5729,29 @@ const compatibilityIssues = useMemo(
               CASRAI / OSHA HazCom: every product identifier should resolve to a current SDS.
             </p>
             {casraiReports.missingSds.length === 0 ? (
-              <p style={{ color: 'var(--success)' }}>All active items have an SDS link or review date.</p>
+              <div className="empty-state empty-state--success">
+                <div className="empty-state-icon">✓</div>
+                <p className="empty-state-title">SDS coverage complete</p>
+                <p className="empty-state-text">
+                  Every active container has an SDS file, manufacturer link, or review date on record.
+                </p>
+              </div>
             ) : (
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.9rem' }}>
+              <ul className="compliance-list">
                 {casraiReports.missingSds.slice(0, 40).map((c) => (
-                  <li key={c.id}>
-                    <strong>{c.name}</strong>
-                    {c.cas_number ? ` · CAS ${c.cas_number}` : ''}
+                  <li key={c.id} className="compliance-list-item">
+                    <div>
+                      <strong>{c.name}</strong>
+                      {c.cas_number ? (
+                        <span className="text-muted"> · CAS {c.cas_number}</span>
+                      ) : null}
+                    </div>
                     <button
                       type="button"
-                      className="btn-sm"
-                      style={{ marginLeft: 8 }}
+                      className="btn btn-sm btn-ghost"
                       onClick={() => handleEdit(c)}
                     >
-                      Fix
+                      Add SDS
                     </button>
                   </li>
                 ))}
@@ -5661,7 +5776,13 @@ const compatibilityIssues = useMemo(
               Driven by chemical class (peroxide former / organic peroxide). Date opened should be set for testing schedules.
             </p>
             {casraiReports.peroxide.length === 0 ? (
-              <p>No peroxide-class chemicals in active inventory.</p>
+              <div className="empty-state empty-state--compact">
+                <div className="empty-state-icon">✓</div>
+                <p className="empty-state-title">No peroxide-formers listed</p>
+                <p className="empty-state-text">
+                  When peroxide-forming chemicals are classified, they appear here with open and test-due dates.
+                </p>
+              </div>
             ) : (
               <div className="table-wrapper">
                 <table className="chem-table">
@@ -5962,21 +6083,48 @@ const compatibilityIssues = useMemo(
           </div>
 
           <div className="dashboard-grid">
-            <div className="dash-card">
-              <h3>Recent Activity</h3>
+            <div className="dash-card dash-card--usage">
+              <div className="dash-card-head">
+                <h3>Recent usage</h3>
+                {canManageOrg && (
+                  <span className="dash-card-badge">Admin view</span>
+                )}
+              </div>
+              <p className="dash-card-sub">
+                {canManageOrg
+                  ? 'Member log activity across this workspace — quantity and who used it.'
+                  : 'Your recent take / return activity.'}
+              </p>
               <div className="dash-list">
                 {transactions.length === 0 ? (
-                  <p className="text-muted">No activity yet</p>
+                  <div className="empty-state empty-state--compact">
+                    <div className="empty-state-icon">📋</div>
+                    <p className="empty-state-title">No usage logged yet</p>
+                    <p className="empty-state-text">
+                      Use <strong>Log</strong> on a chemical row when material is taken or returned.
+                    </p>
+                  </div>
                 ) : (
-                  transactions.slice(0, 10).map((t) => (
-                    <div key={t.id} className="dash-item">
+                  transactions.slice(0, 12).map((t) => (
+                    <div key={t.id || `${t.chemical_id}-${t.created_at}`} className="dash-item dash-item--usage">
                       <span className={`history-type type-${t.type}`}>
                         {t.type === 'take' ? '➖' : t.type === 'return' ? '➕' : '✏️'}
                       </span>
-                      <div>
-                        <strong>{t.chemical_name}</strong>
-                        <div className="text-muted" style={{ fontSize: '0.8rem' }}>
-                          {t.user_email} • {formatDateTime(t.created_at)}
+                      <div className="dash-item-body">
+                        <div className="dash-item-title">
+                          <strong>{t.chemical_name || 'Chemical'}</strong>
+                          {(t.quantity != null && t.quantity !== '') && (
+                            <span className="dash-qty">
+                              {t.type === 'take' ? '−' : t.type === 'return' ? '+' : ''}
+                              {t.quantity}
+                              {t.unit ? ` ${t.unit}` : ''}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-muted dash-item-meta">
+                          {t.user_email || t.user_name || 'User'}
+                          {' · '}
+                          {formatDateTime(t.created_at)}
                         </div>
                       </div>
                     </div>
@@ -7230,7 +7378,7 @@ const compatibilityIssues = useMemo(
                     </button>
                   )}
               </div>
-            ) : viewMode === 'cards' ? (
+            ) : effectiveViewMode === 'cards' ? (
               /* ---- CARD VIEW ---- */
               <div className="cards-grid">
                 {displayedChemicals.map((chem) => {
@@ -7480,21 +7628,32 @@ const compatibilityIssues = useMemo(
                               />
                             </td>
                           )}
-                          <td>
+                          <td className="col-name">
                             <strong>{chem.name}</strong>
                             {chem.hazard_notes && (
                               <div className="hazard-sub">{chem.hazard_notes}</div>
                             )}
                           </td>
-                          <td className="mono">{chem.molecular_formula || '—'}</td>
-                          <td className="mono">{chem.cas_number || '—'}</td>
-                          <td>
+                          <td className="mono col-formula">{chem.molecular_formula || '—'}</td>
+                          <td className="mono col-cas">{chem.cas_number || '—'}</td>
+                          <td className="col-qty">
                             {chem.quantity} {chem.unit}
                           </td>
-                          <td>{chem.location || '—'}</td>
-                          <td>{chem.batch_lot || '—'}</td>
-                          <td>{chem.supplier || '—'}</td>
-                          <td className="mono">{chem.barcode || '—'}</td>
+                          <td
+                            className="col-location"
+                            title={chem.location || ''}
+                          >
+                            <span className="loc-text">{chem.location || '—'}</span>
+                          </td>
+                          <td className="col-batch" title={chem.batch_lot || ''}>
+                            {chem.batch_lot || '—'}
+                          </td>
+                          <td className="col-supplier" title={chem.supplier || ''}>
+                            {chem.supplier || '—'}
+                          </td>
+                          <td className="mono col-barcode" title={chem.barcode || ''}>
+                            {chem.barcode || '—'}
+                          </td>
                           <td>
                             {formatDate(chem.expiry_date)}
                             {days !== null && (
@@ -7522,48 +7681,126 @@ const compatibilityIssues = useMemo(
                           <td>
                             <span className={getStatusBadgeClass(chem)}>{getStatus(chem)}</span>
                           </td>
-                          <td className="sds-cell">
+                          <td className="sds-cell col-sds">
                             {uploadProgress[chem.id] !== undefined ? (
-                              <div className="mini-progress">
+                              <div className="mini-progress" title="Uploading SDS…">
                                 <div style={{ width: `${uploadProgress[chem.id]}%` }} />
                               </div>
-                            ) : chem.sds_filename ? (
-                              <div className="sds-actions">
-                                <button
-                                  className="link-btn"
-                                  onClick={() => handleDownloadSds(chem.id)}
-                                >
-                                  Download
-                                </button>
-                                <label className="link-btn">
-                                  Replace
-                                  <input
-                                    type="file"
-                                    accept=".pdf"
-                                    hidden
-                                    onChange={(e) =>
-                                      e.target.files?.[0] &&
-                                      handleSdsUpload(chem.id, e.target.files[0])
-                                    }
-                                  />
-                                </label>
-                              </div>
                             ) : (
-                              <label className="link-btn">
-                                Upload
-                                <input
-                                  type="file"
-                                  accept=".pdf"
-                                  hidden
-                                  onChange={(e) =>
-                                    e.target.files?.[0] &&
-                                    handleSdsUpload(chem.id, e.target.files[0])
-                                  }
-                                />
-                              </label>
+                              (() => {
+                                const sds = resolveSdsInfo(chem)
+                                const meta = getChemMeta(chem.id)
+                                const prov = Boolean(chem.provisional ?? meta.provisional ?? sds.provisional)
+                                return (
+                                  <div className="sds-cell-inner">
+                                    {sds.kind === 'file' && (
+                                      <div className="sds-actions sds-actions--stack">
+                                        <button
+                                          type="button"
+                                          className="sds-link sds-link--primary"
+                                          onClick={() => handleDownloadSds(chem.id)}
+                                          title={sds.filename || 'View SDS PDF'}
+                                        >
+                                          View SDS
+                                        </button>
+                                        {canEditChemicals && (
+                                          <label className="sds-link sds-link--muted">
+                                            Replace
+                                            <input
+                                              type="file"
+                                              accept=".pdf"
+                                              hidden
+                                              onChange={(e) =>
+                                                e.target.files?.[0] &&
+                                                handleSdsUpload(chem.id, e.target.files[0])
+                                              }
+                                            />
+                                          </label>
+                                        )}
+                                      </div>
+                                    )}
+                                    {sds.kind === 'url' && (
+                                      <div className="sds-actions sds-actions--stack">
+                                        <a
+                                          className="sds-link sds-link--primary"
+                                          href={sds.url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                        >
+                                          Open SDS
+                                        </a>
+                                        {canEditChemicals && (
+                                          <label className="sds-link sds-link--muted">
+                                            PDF
+                                            <input
+                                              type="file"
+                                              accept=".pdf"
+                                              hidden
+                                              onChange={(e) =>
+                                                e.target.files?.[0] &&
+                                                handleSdsUpload(chem.id, e.target.files[0])
+                                              }
+                                            />
+                                          </label>
+                                        )}
+                                      </div>
+                                    )}
+                                    {sds.kind === 'ref' && (
+                                      <div className="sds-actions sds-actions--stack">
+                                        <a
+                                          className="sds-link sds-link--ref"
+                                          href={sds.url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          title="PubChem reference — not a manufacturer SDS"
+                                        >
+                                          PubChem
+                                        </a>
+                                        {canEditChemicals && (
+                                          <label className="sds-link sds-link--muted">
+                                            Upload SDS
+                                            <input
+                                              type="file"
+                                              accept=".pdf"
+                                              hidden
+                                              onChange={(e) =>
+                                                e.target.files?.[0] &&
+                                                handleSdsUpload(chem.id, e.target.files[0])
+                                              }
+                                            />
+                                          </label>
+                                        )}
+                                      </div>
+                                    )}
+                                    {sds.kind === 'none' && (
+                                      canEditChemicals ? (
+                                        <label className="sds-link sds-link--upload">
+                                          Upload
+                                          <input
+                                            type="file"
+                                            accept=".pdf"
+                                            hidden
+                                            onChange={(e) =>
+                                              e.target.files?.[0] &&
+                                              handleSdsUpload(chem.id, e.target.files[0])
+                                            }
+                                          />
+                                        </label>
+                                      ) : (
+                                        <span className="sds-missing">No SDS</span>
+                                      )
+                                    )}
+                                    {prov && (
+                                      <span className="sds-provisional-tag" title="SDS pending — not fully active for compliance">
+                                        Provisional
+                                      </span>
+                                    )}
+                                  </div>
+                                )
+                              })()
                             )}
                           </td>
-                          <td className="actions">
+                          <td className="actions col-actions">
                             <div className="row-actions">
                               {canEditChemicals && (
                                 <button

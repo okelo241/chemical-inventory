@@ -2,9 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="theme-color" content="#1e4fd6" />
+    <meta name="color-scheme" content="light dark" />
+
+    <!-- Favicons (Google Search needs a real file at these URLs, ideally 48×48+) -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.png" type="image/png" sizes="32x32" />
+    <link rel="icon" href="/favicon-48.png" type="image/png" sizes="48x48" />
+    <link rel="icon" href="/favicon-192.png" type="image/png" sizes="192x192" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="manifest" href="/site.webmanifest" />
 
     <title>
       Lab Chemical Inventory | Chemical Inventory, SDS &amp; GHS Safety Software
@@ -15,7 +24,7 @@
     />
     <meta
       name="keywords"
-      content="lab chemical inventory, chemical inventory software, SDS management, GHS pictograms, chemical storage guide, laboratory safety, chemical hygiene, expiry tracking, flammable storage, oxidizer segregation, lab inventory system"
+      content="lab chemical inventory, chemical inventory software, SDS management, GHS pictograms, chemical storage guide, laboratory safety, chemical hygiene, expiry tracking, lab inventory system"
     />
     <meta name="author" content="Lab Chemical Inventory" />
     <meta name="robots" content="index, follow" />
@@ -34,8 +43,9 @@
     <meta property="og:url" content="https://labchemicalinventory.com/" />
     <meta property="og:site_name" content="Lab Chemical Inventory" />
     <meta property="og:locale" content="en_US" />
-    <!-- Optional: add a 1200×630 social image when available -->
-    <!-- <meta property="og:image" content="https://labchemicalinventory.com/og-image.png" /> -->
+    <meta property="og:image" content="https://labchemicalinventory.com/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
@@ -47,9 +57,8 @@
       name="twitter:description"
       content="Chemical inventory software with SDS links, GHS pictograms, expiry alerts, and organization workspaces for real laboratories."
     />
-    <!-- <meta name="twitter:image" content="https://labchemicalinventory.com/og-image.png" /> -->
+    <meta name="twitter:image" content="https://labchemicalinventory.com/og-image.png" />
 
-    <!-- Structured data for search -->
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -59,25 +68,24 @@
         "description": "Lab chemical inventory software for tracking stock, SDS files, expiry dates, GHS hazards, and organization workspaces.",
         "applicationCategory": "BusinessApplication",
         "operatingSystem": "Web",
+        "image": "https://labchemicalinventory.com/og-image.png",
         "offers": {
           "@type": "Offer",
           "price": "0",
           "priceCurrency": "USD"
-        },
-        "featureList": [
-          "Container-level chemical inventory",
-          "SDS file linking",
-          "GHS pictogram support",
-          "Expiry and low-stock alerts",
-          "Storage location hierarchy",
-          "Organization workspaces and invites",
-          "Usage logging and audit history"
-        ]
+        }
       }
     </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
-  </body>
+    <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('/sw.js').catch(function () {});
+      });
+    }
+  </script>
+</body>
 </html>

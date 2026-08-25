@@ -186,7 +186,7 @@ function Login({
     if (!isRecoveryLink) return
     setMode('reset')
     setMessage(
-      'You opened a password reset link. Enter a new password below to finish resetting your account.'
+      'You opened a password reset link. Choose a new password below to finish. You will then sign in with the new password.'
     )
     try {
       sessionStorage.setItem('authRecovery', '1')
@@ -194,6 +194,30 @@ function Login({
       /* ignore */
     }
   }, [isRecoveryLink])
+
+  // Supabase recovery session event
+  useEffect(() => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        try {
+          sessionStorage.setItem('authRecovery', '1')
+        } catch {
+          /* ignore */
+        }
+        setMode('reset')
+        setMessage(
+          'Recovery session active. Enter and confirm your new password below.'
+        )
+      }
+    })
+    return () => {
+      try {
+        sub?.subscription?.unsubscribe?.()
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [])
 
   // Keep account type locked to organization for invite links
   useEffect(() => {
@@ -549,7 +573,7 @@ function Login({
     }
 
     setMessage(
-      'Password updated successfully! Sign in with your new password.'
+      'Password updated successfully. Sign in with your new password.'
     )
     setMode('login')
     setOtpCode('')
@@ -557,6 +581,15 @@ function Login({
     setConfirmNewPassword('')
     setPassword('')
     setFormTouched(false)
+
+    try {
+      sessionStorage.removeItem('authRecovery')
+      const url = new URL(window.location.href)
+      url.searchParams.delete('type')
+      window.history.replaceState({}, document.title, url.pathname + url.search)
+    } catch {
+      /* ignore */
+    }
 
     // End recovery session so the user signs in cleanly
     try {
@@ -877,27 +910,43 @@ function Login({
           </div>
         )}
 
-        {/* Invite badge when locked to org */}
+        {/* Org-branded invite panel — locked workspace */}
         {isInviteFlow && (mode === 'login' || mode === 'signup') && (
-          <div
-            className="auth-invite-badge"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              marginBottom: 16,
-              padding: '10px 14px',
-              borderRadius: 12,
-              background: 'rgba(59, 130, 246, 0.08)',
-              border: '1px solid rgba(59, 130, 246, 0.25)',
-              fontSize: '0.875rem',
-              color: 'var(--text, #0f172a)',
-            }}
-          >
-            <span aria-hidden="true">🏢</span>
-            <span>
-              Joining organization: <strong>{displayOrgName}</strong>
-            </span>
+          <div className="auth-invite-panel" role="status">
+            <div className="auth-invite-avatar" aria-hidden="true">
+              {(displayOrgName || 'Org')
+                .split(/\s+/)
+                .filter(Boolean)
+                .slice(0, 2)
+                .map((w) => w[0]?.toUpperCase())
+                .join('') || 'ORG'}
+            </div>
+            <div className="auth-invite-copy">
+              <p className="auth-invite-kicker">Organization invite</p>
+              <p className="auth-invite-name">{displayOrgName}</p>
+              <p className="auth-invite-hint">
+                {mode === 'login'
+                  ? 'Sign in with the email that received the invite. Use the temporary password from the invite email, then change it under Profile.'
+                  : 'Create your account with the invited email to join this organization workspace.'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {mode === 'reset' && (
+          <div className="auth-invite-panel auth-invite-panel--reset" role="status">
+            <div className="auth-invite-avatar auth-invite-avatar--reset" aria-hidden="true">
+              🔑
+            </div>
+            <div className="auth-invite-copy">
+              <p className="auth-invite-kicker">Password reset</p>
+              <p className="auth-invite-name">Set a new password</p>
+              <p className="auth-invite-hint">
+                {isRecoveryLink
+                  ? 'This page stays on reset until you finish — you will not be taken into the inventory until you sign in again.'
+                  : 'Enter the code from your email and choose a new password. Prefer opening the link in the email when possible.'}
+              </p>
+            </div>
           </div>
         )}
 
