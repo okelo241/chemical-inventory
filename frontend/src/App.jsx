@@ -316,6 +316,9 @@ const EMPTY_FORM = {
   lifecycle_status: 'in_stock',
   sds_filename: '',
   inventory_owner: '',
+  provisional: false,
+  signal_word: '',
+  h_statements: '',
 }
 
 /** Idle timeout: 30 minutes of no user activity → automatic logout */
@@ -1362,8 +1365,16 @@ function App() {
   const [showProfileModal, setShowProfileModal] = useState(false)
   const [profileName, setProfileName] = useState('')
   const [profileAvatar, setProfileAvatar] = useState('')
+  const [profileCurrentPassword, setProfileCurrentPassword] = useState('')
   const [profileNewPassword, setProfileNewPassword] = useState('')
   const [profileConfirmPassword, setProfileConfirmPassword] = useState('')
+  const [blockHighStorage, setBlockHighStorage] = useState(() => {
+    try {
+      return localStorage.getItem('blockHighStorage') === '1'
+    } catch {
+      return false
+    }
+  })
   const [profileSaving, setProfileSaving] = useState(false)
   const [profileMsg, setProfileMsg] = useState(null)
   const [profilePrefs, setProfilePrefs] = useState({
@@ -1551,6 +1562,7 @@ function App() {
       meta.full_name || meta.name || session?.user?.email?.split('@')[0] || ''
     )
     setProfileAvatar(meta.avatar_url || meta.picture || '')
+    setProfileCurrentPassword('')
     setProfileNewPassword('')
     setProfileConfirmPassword('')
     setProfileMsg(null)
@@ -1695,6 +1707,11 @@ function App() {
   const handleChangePassword = async (e) => {
     e?.preventDefault?.()
     if (!session?.user) return
+    const email = session.user.email
+    if (!profileCurrentPassword) {
+      setProfileMsg({ type: 'error', text: 'Current password is required when setting a new password.' })
+      return
+    }
     if (!profileNewPassword || profileNewPassword.length < 6) {
       setProfileMsg({ type: 'error', text: 'New password must be at least 6 characters' })
       return
@@ -1706,10 +1723,21 @@ function App() {
     setProfileSaving(true)
     setProfileMsg(null)
     try {
+      // Re-authenticate so Supabase accepts the password change
+      if (email) {
+        const { error: reauthErr } = await supabase.auth.signInWithPassword({
+          email,
+          password: profileCurrentPassword,
+        })
+        if (reauthErr) {
+          throw new Error('Current password is incorrect.')
+        }
+      }
       const { error } = await supabase.auth.updateUser({
         password: profileNewPassword,
       })
       if (error) throw error
+      setProfileCurrentPassword('')
       setProfileNewPassword('')
       setProfileConfirmPassword('')
       setProfileMsg({
@@ -1720,9 +1748,7 @@ function App() {
     } catch (err) {
       setProfileMsg({
         type: 'error',
-        text:
-          err.message ||
-          'Could not change password. If you signed in with a temporary invite password, try again or use Forgot password on the login screen.',
+        text: err.message || 'Could not change password. Check current password and try again.',
       })
     } finally {
       setProfileSaving(false)
@@ -3234,6 +3260,66 @@ const compatibilityIssues = useMemo(
   /* CRUD — CREATE / UPDATE                                                   */
   /* ======================================================================== */
 
+
+  const exportCasRollupCsv = () => {
+    const rows = (casraiReports?.epcraRows || []).map((r) => ({
+      CAS: r.cas,
+      Name: r.name,
+      Containers: r.containers,
+      'Total quantity': r.totalQty,
+      Unit: r.unit,
+      Locations: r.locations,
+    }))
+    if (!rows.length) {
+      showMessage('error', 'No CAS rollup data to export')
+      return
+    }
+    downloadCSV(`cas-rollup-${new Date().toISOString().slice(0, 10)}.csv`, rows)
+    showMessage('success', 'CAS rollup CSV downloaded')
+  }
+
+  const exportEmergencyPackCsv = () => {
+    const rows = (chemicals || [])
+      .filter((c) => !(c.archived || getChemMeta(c.id).archived))
+      .filter((c) => {
+        const s = c.lifecycle_status || getChemMeta(c.id).lifecycle_status || 'in_stock'
+        return s === 'in_stock' || s === 'in_use'
+      })
+      .map((c) => {
+        const meta = getChemMeta(c.id)
+        return {
+          Name: c.name,
+          CAS: c.cas_number || '',
+          Quantity: c.quantity,
+          Unit: c.unit,
+          Location: c.location || locationKeyOf(c),
+          'Signal word': c.signal_word || meta.signal_word || '',
+          'H-statements': c.h_statements || meta.h_statements || '',
+          Hazards: (c.hazard_symbols || []).join('; '),
+          Classes: (c.chemical_classes || []).join('; '),
+          SDS: c.sds_url || meta.sds_url || '',
+          Provisional: c.provisional || meta.provisional ? 'yes' : 'no',
+          Owner: c.inventory_owner || meta.inventory_owner || '',
+        }
+      })
+    if (!rows.length) {
+      showMessage('error', 'No active chemicals for emergency pack')
+      return
+    }
+    downloadCSV(`emergency-pack-${new Date().toISOString().slice(0, 10)}.csv`, rows)
+    showMessage('success', 'Emergency pack CSV downloaded')
+  }
+
+  const isChoForChemical = (chemical) => {
+    const email = (session?.user?.email || '').toLowerCase()
+    if (!email) return false
+    if (isOrgAdmin || activeOrgRole === 'owner' || activeOrgRole === 'admin') return true
+    const owner = String(
+      chemical?.inventory_owner || getChemMeta(chemical?.id).inventory_owner || ''
+    ).toLowerCase()
+    return owner && (owner === email || owner.includes(email))
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     const errors = {}
@@ -3311,6 +3397,14 @@ const compatibilityIssues = useMemo(
               .slice(0, 5)
               .map((x) => `• ${x.name}: ${x.reason}`)
               .join('\n')
+            if (blockHighStorage) {
+              showMessage(
+                'error',
+                `Save blocked: high storage conflict at this location (${highConflicts.length}). Turn off “Block high co-storage” in Profile to allow override.`
+              )
+              setSubmitting(false)
+              return
+            }
             const ok = window.confirm(
               `HIGH storage conflict at "${locationJoined || locKey}":\n\n${lines}\n\nSave anyway? (Cancel to fix location)`
             )
@@ -3322,6 +3416,26 @@ const compatibilityIssues = useMemo(
         }
       } catch (err) {
         console.warn('segregation check failed', err)
+      }
+
+
+      // SDS required for active unless provisional
+      const wantsActive =
+        (formData.lifecycle_status || 'in_stock') === 'in_stock' ||
+        (formData.lifecycle_status || '') === 'in_use'
+      const hasSds =
+        Boolean((formData.sds_url || '').trim()) ||
+        Boolean((formData.sds_filename || '').trim()) ||
+        Boolean((formData.sds_reviewed_at || '').trim())
+      if (wantsActive && !hasSds && !formData.provisional) {
+        const ok = window.confirm(
+          'No SDS on file for an active container.\n\nOK = save as PROVISIONAL (SDS pending)\nCancel = go add SDS first'
+        )
+        if (!ok) {
+          setSubmitting(false)
+          return
+        }
+        formData.provisional = true
       }
 
 
@@ -3380,6 +3494,9 @@ const compatibilityIssues = useMemo(
           sds_filename: formData.sds_filename || undefined,
           inventory_owner: formData.inventory_owner || undefined,
           pubchem_url: formData.pubchem_url || undefined,
+          provisional: Boolean(formData.provisional),
+          signal_word: formData.signal_word || undefined,
+          h_statements: formData.h_statements || undefined,
         })
       }
       pushAudit(editingId ? 'chemical_update' : 'chemical_create', {
@@ -3843,6 +3960,9 @@ const compatibilityIssues = useMemo(
       sds_filename: chemical.sds_filename || meta.sds_filename || '',
       inventory_owner: chemical.inventory_owner || meta.inventory_owner || '',
       pubchem_url: chemical.pubchem_url || meta.pubchem_url || '',
+      provisional: Boolean(chemical.provisional ?? meta.provisional),
+      signal_word: chemical.signal_word || meta.signal_word || '',
+      h_statements: chemical.h_statements || meta.h_statements || '',
     })
     setEditingId(chemical.id)
     setShowForm(true)
@@ -4434,7 +4554,7 @@ const compatibilityIssues = useMemo(
                     type="button"
                     role="menuitem"
                     className="header-menu-item"
-                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left', color: 'var(--text)' }}
                     onClick={() => {
                       setShowHistory(true)
                       setHeaderMenuOpen(false)
@@ -4446,7 +4566,7 @@ const compatibilityIssues = useMemo(
                     type="button"
                     role="menuitem"
                     className="header-menu-item"
-                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left', color: 'var(--text)' }}
                     onClick={() => {
                       startScanner()
                       setHeaderMenuOpen(false)
@@ -4458,7 +4578,7 @@ const compatibilityIssues = useMemo(
                     type="button"
                     role="menuitem"
                     className="header-menu-item"
-                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left', color: 'var(--text)' }}
                     onClick={() => {
                       setCommandOpen(true)
                       setHeaderMenuOpen(false)
@@ -4470,7 +4590,7 @@ const compatibilityIssues = useMemo(
                     type="button"
                     role="menuitem"
                     className="header-menu-item"
-                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left', color: 'var(--text)' }}
                     onClick={() => {
                       setHazardLegendOpen(true)
                       setHeaderMenuOpen(false)
@@ -4518,7 +4638,7 @@ const compatibilityIssues = useMemo(
                     type="button"
                     role="menuitem"
                     className="header-menu-item"
-                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left', color: 'var(--text)' }}
                     onClick={() => {
                       setShowAuditLog(true)
                       setHeaderMenuOpen(false)
@@ -4531,7 +4651,7 @@ const compatibilityIssues = useMemo(
                     type="button"
                     role="menuitem"
                     className="header-menu-item"
-                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left', color: 'var(--text)' }}
                     onClick={() => {
                       setHeaderMenuOpen(false)
                       openProfileModal()
@@ -4543,7 +4663,7 @@ const compatibilityIssues = useMemo(
                     type="button"
                     role="menuitem"
                     className="header-menu-item"
-                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left', color: 'var(--text)' }}
                     onClick={() => {
                       setShowSdsReport(true)
                       setHeaderMenuOpen(false)
@@ -4555,7 +4675,7 @@ const compatibilityIssues = useMemo(
                     type="button"
                     role="menuitem"
                     className="header-menu-item"
-                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left', color: 'var(--text)' }}
                     onClick={() => {
                       setShowWasteModal(true)
                       setHeaderMenuOpen(false)
@@ -4568,7 +4688,7 @@ const compatibilityIssues = useMemo(
                     type="button"
                     role="menuitem"
                     className="header-menu-item"
-                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left', color: 'var(--text)' }}
                     onClick={() => {
                       setShowArchived((v) => !v)
                       setHeaderMenuOpen(false)
@@ -4580,7 +4700,7 @@ const compatibilityIssues = useMemo(
                     type="button"
                     role="menuitem"
                     className="header-menu-item"
-                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left' }}
+                    style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', border: 0, background: 'transparent', borderRadius: 8, cursor: 'pointer', textAlign: 'left', color: 'var(--text)' }}
                     onClick={() => {
                       setShowLanding(true)
                       setHeaderMenuOpen(false)
@@ -4923,6 +5043,15 @@ const compatibilityIssues = useMemo(
                 </table>
               </div>
             )}
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+            <button type="button" className="btn btn-primary btn-sm" onClick={exportEmergencyPackCsv}>
+              Download emergency pack CSV
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={exportCasRollupCsv}>
+              Download CAS rollup CSV
+            </button>
           </div>
 
           <div className="card" style={{ padding: 16 }}>
@@ -5504,6 +5633,45 @@ const compatibilityIssues = useMemo(
                         onChange={handleChange}
                         placeholder="Responsible person name or email"
                       />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="signal_word">GHS signal word</label>
+                      <select
+                        id="signal_word"
+                        name="signal_word"
+                        value={formData.signal_word || ''}
+                        onChange={handleChange}
+                      >
+                        <option value="">—</option>
+                        <option value="Danger">Danger</option>
+                        <option value="Warning">Warning</option>
+                      </select>
+                    </div>
+                    <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                      <label htmlFor="h_statements">H-statements</label>
+                      <input
+                        id="h_statements"
+                        name="h_statements"
+                        value={formData.h_statements || ''}
+                        onChange={handleChange}
+                        placeholder="e.g. H225; H319; H336"
+                      />
+                    </div>
+                    <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                      <label className="profile-check" style={{ marginBottom: 0 }}>
+                        <input
+                          type="checkbox"
+                          name="provisional"
+                          checked={Boolean(formData.provisional)}
+                          onChange={(e) =>
+                            setFormData((prev) => ({
+                              ...prev,
+                              provisional: e.target.checked,
+                            }))
+                          }
+                        />
+                        Provisional (SDS pending — not fully active for compliance)
+                      </label>
                     </div>
                     <div className="form-group" style={{ gridColumn: '1 / -1' }}>
                       <label htmlFor="sds_url_field">SDS URL (manufacturer preferred)</label>
@@ -7317,6 +7485,22 @@ const compatibilityIssues = useMemo(
                 <p className="profile-section-note">
                   Applied immediately. Click Save to sync theme to your account.
                 </p>
+                <label className="profile-check" style={{ marginTop: 12 }}>
+                  <input
+                    type="checkbox"
+                    checked={blockHighStorage}
+                    onChange={(e) => {
+                      const on = e.target.checked
+                      setBlockHighStorage(on)
+                      try {
+                        localStorage.setItem('blockHighStorage', on ? '1' : '0')
+                      } catch {
+                        /* ignore */
+                      }
+                    }}
+                  />
+                  Block high-risk co-storage (do not allow override on save)
+                </label>
 
                 <h4 style={{ margin: '8px 0 0', fontSize: 14 }}>Default workspace</h4>
                 {isOrgMemberOnly ? (
@@ -7462,6 +7646,16 @@ const compatibilityIssues = useMemo(
                 Use this after signing in with a temporary invite password.
               </p>
               <form onSubmit={handleChangePassword} style={{ display: 'grid', gap: 10 }}>
+                <input
+                  className="search-input"
+                  type="password"
+                  placeholder="Current password"
+                  value={profileCurrentPassword}
+                  onChange={(e) => setProfileCurrentPassword(e.target.value)}
+                  autoComplete="current-password"
+                  disabled={profileSaving}
+                  required
+                />
                 <input
                   className="search-input"
                   type="password"

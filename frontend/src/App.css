@@ -5705,3 +5705,32 @@ textarea {
 [data-theme="dark"] .profile-org-list li {
   background: var(--input-bg, #0f172a);
 }
+
+
+/* Header ⋯ menu — readable in dark mode */
+.header-menu-dropdown {
+  background: var(--card) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+}
+.header-menu-item {
+  color: var(--text) !important;
+  background: transparent !important;
+}
+.header-menu-item:hover {
+  background: var(--bg-alt, var(--bg)) !important;
+  color: var(--text) !important;
+}
+[data-theme="dark"] .header-menu-dropdown {
+  background: #151d2e !important;
+  border-color: #334155 !important;
+  color: #e8eef7 !important;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55) !important;
+}
+[data-theme="dark"] .header-menu-item {
+  color: #e8eef7 !important;
+}
+[data-theme="dark"] .header-menu-item:hover {
+  background: #243044 !important;
+  color: #ffffff !important;
+}
