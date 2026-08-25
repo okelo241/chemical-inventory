@@ -250,12 +250,12 @@ const hasSdsRecord = (chemical, meta = {}) => {
 }
 
 /** Resolved SDS presentation for table / menus */
-const resolveSdsInfo = (chemical) => {
+const resolveSdsInfo = (chemical, meta = {}) => {
   if (!chemical) return { kind: 'none', label: 'No SDS', url: null, filename: null }
-  const meta = typeof getChemMeta === 'function' ? getChemMeta(chemical.id) : {}
-  const url = (chemical.sds_url || meta.sds_url || '').trim() || null
-  const filename = chemical.sds_filename || meta.sds_filename || null
-  const provisional = Boolean(chemical.provisional ?? meta.provisional)
+  const m = meta && typeof meta === 'object' ? meta : {}
+  const url = (chemical.sds_url || m.sds_url || '').trim() || null
+  const filename = chemical.sds_filename || m.sds_filename || null
+  const provisional = Boolean(chemical.provisional ?? m.provisional)
   if (filename) {
     return {
       kind: 'file',
@@ -1356,6 +1356,13 @@ function App() {
   const [actionMenuId, setActionMenuId] = useState(null)
   const [sortBy, setSortBy] = useState('name')
   const [viewMode, setViewMode] = useState(() => localStorage.getItem('viewMode') || 'table')
+  const [isNarrowScreen, setIsNarrowScreen] = useState(() => {
+    try {
+      return typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches
+    } catch {
+      return false
+    }
+  })
   const [mainView, setMainView] = useState('inventory')
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState(null)
@@ -5094,7 +5101,7 @@ const compatibilityIssues = useMemo(
   const isOrgMemberOnly =
     isOrgWorkspace && roleLower !== 'admin' && roleLower !== 'owner'
   const effectiveViewMode =
-    isNarrowScreen && viewMode === 'table' ? 'cards' : viewMode
+    (isNarrowScreen && viewMode === 'table') ? 'cards' : (viewMode || 'table')
 
   const canManageOrg = isOrgWorkspace
     ? roleLower === 'admin' || roleLower === 'owner'
@@ -7688,7 +7695,7 @@ const compatibilityIssues = useMemo(
                               </div>
                             ) : (
                               (() => {
-                                const sds = resolveSdsInfo(chem)
+                                const sds = resolveSdsInfo(chem, getChemMeta(chem.id))
                                 const meta = getChemMeta(chem.id)
                                 const prov = Boolean(chem.provisional ?? meta.provisional ?? sds.provisional)
                                 return (
