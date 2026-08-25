@@ -6723,3 +6723,42 @@ textarea {
     min-height: 40px;
   }
 }
+
+
+/* Row ⋯ menu — fixed so sticky Actions never clips it */
+.row-actions-menu--fixed {
+  position: fixed !important;
+  min-width: 220px !important;
+  max-height: min(320px, calc(100vh - 24px));
+  overflow-y: auto;
+  z-index: 100000 !important;
+  right: auto !important;
+  box-shadow: 0 16px 48px rgba(15, 23, 42, 0.22) !important;
+}
+[data-theme="dark"] .row-actions-menu--fixed {
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55) !important;
+}
+
+/* Sticky actions: stay visible while scrolling horizontally, but don't trap menus */
+.chem-table th.col-actions,
+.chem-table td.actions,
+.chem-table td.col-actions {
+  position: sticky !important;
+  right: 0 !important;
+  z-index: 6 !important;
+  background: var(--card) !important;
+  box-shadow: -8px 0 16px rgba(15, 23, 42, 0.08);
+  overflow: visible !important;
+}
+.chem-table th.col-actions {
+  z-index: 7 !important;
+  background: var(--bg) !important;
+}
+.table-wrapper {
+  overflow-x: auto !important;
+  overflow-y: visible !important;
+}
+.row-actions-menu-wrap {
+  overflow: visible !important;
+  position: static !important;
+}

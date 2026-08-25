@@ -1354,6 +1354,7 @@ function App() {
   const [filter, setFilter] = useState('all')
   const [moreFiltersOpen, setMoreFiltersOpen] = useState(false)
   const [actionMenuId, setActionMenuId] = useState(null)
+  const [actionMenuPos, setActionMenuPos] = useState({ top: 0, left: 0 })
   const [sortBy, setSortBy] = useState('name')
   const [viewMode, setViewMode] = useState(() => localStorage.getItem('viewMode') || 'table')
   const [isNarrowScreen, setIsNarrowScreen] = useState(() => {
@@ -2140,7 +2141,9 @@ function App() {
   /* Close row action menu on outside click / Escape */
   useEffect(() => {
     if (!actionMenuId) return undefined
-    const close = () => setActionMenuId(null)
+    const close = () => {
+      setActionMenuId(null)
+    }
     const onKey = (e) => {
       if (e.key === 'Escape') close()
     }
@@ -7839,17 +7842,50 @@ const compatibilityIssues = useMemo(
                                   aria-expanded={actionMenuId === chem.id}
                                   onClick={(e) => {
                                     e.stopPropagation()
-                                    setActionMenuId((id) =>
-                                      id === chem.id ? null : chem.id
-                                    )
+                                    e.preventDefault()
+                                    if (actionMenuId === chem.id) {
+                                      setActionMenuId(null)
+                                      return
+                                    }
+                                    const rect = e.currentTarget.getBoundingClientRect()
+                                    const menuW = 220
+                                    const pad = 8
+                                    let left = rect.right - menuW
+                                    if (left < pad) left = pad
+                                    if (left + menuW > window.innerWidth - pad) {
+                                      left = window.innerWidth - menuW - pad
+                                    }
+                                    // Prefer below; flip up if near bottom
+                                    const spaceBelow = window.innerHeight - rect.bottom
+                                    const top =
+                                      spaceBelow < 260 && rect.top > 260
+                                        ? Math.max(pad, rect.top - 8)
+                                        : rect.bottom + 6
+                                    const openUp = spaceBelow < 260 && rect.top > 260
+                                    setActionMenuPos({
+                                      top: openUp ? undefined : top,
+                                      bottom: openUp
+                                        ? window.innerHeight - rect.top + 6
+                                        : undefined,
+                                      left,
+                                    })
+                                    setActionMenuId(chem.id)
                                   }}
                                 >
                                   ⋯
                                 </button>
                                 {actionMenuId === chem.id && (
                                   <div
-                                    className="row-actions-menu"
+                                    className="row-actions-menu row-actions-menu--fixed"
                                     role="menu"
+                                    style={{
+                                      position: 'fixed',
+                                      top: actionMenuPos.top,
+                                      bottom: actionMenuPos.bottom,
+                                      left: actionMenuPos.left,
+                                      right: 'auto',
+                                      zIndex: 100000,
+                                    }}
                                     onClick={(e) => e.stopPropagation()}
                                   >
                                     {chem.barcode && (
