@@ -284,7 +284,8 @@ const EMPTY_FORM = {
   quantity: '',
   unit: 'g',
   location: '',
-  // Hierarchical location parts (joined into `location` on save)
+  // Hierarchical location parts (Site -> Building -> Room -> Cabinet -> Shelf)
+  loc_site: '',
   loc_building: '',
   loc_room: '',
   loc_cabinet: '',
@@ -319,6 +320,8 @@ const EMPTY_FORM = {
   provisional: false,
   signal_word: '',
   h_statements: '',
+  peroxide_test_due: '',
+  threshold_lbs: '', // optional CAS threshold override for alerts
 }
 
 /** Idle timeout: 30 minutes of no user activity → automatic logout */
@@ -340,13 +343,52 @@ const AUDIT_STORAGE_KEY = 'chem_audit_log_v1'
 const CHEM_META_STORAGE_KEY = 'chem_meta_v1'
 const WASTE_STORAGE_KEY = 'chem_waste_log_v1'
 const LAB_UNITS_STORAGE_KEY = 'chem_lab_units_v1'
+const CAS_THRESHOLDS_KEY = 'chem_cas_thresholds_v1'
+const SERVER_AUDIT_KEY = 'chem_server_audit_queue_v1'
+const LIMS_WEBHOOK_KEY = 'chem_lims_webhook_v1'
+const REGULATORY_FLAGS_KEY = 'chem_regulatory_flags_v1'
+
+/**
+ * Phase C — sample Prop 65 CAS seeds (illustrative subset; not a full legal list).
+ * Labs should replace/extend via Compliance → Regulatory flags.
+ */
+const PROP65_SEED_CAS = [
+  '71-43-2', // Benzene
+  '50-00-0', // Formaldehyde
+  '75-01-4', // Vinyl chloride
+  '107-13-1', // Acrylonitrile
+  '56-23-5', // Carbon tetrachloride
+  '67-66-3', // Chloroform
+  '106-93-4', // 1,2-Dibromoethane
+  '79-01-6', // Trichloroethylene
+  '127-18-4', // Tetrachloroethylene
+  '108-88-3', // Toluene
+  '100-41-4', // Ethylbenzene
+  '1330-20-7', // Xylene
+  '75-09-2', // Dichloromethane
+  '107-06-2', // 1,2-Dichloroethane
+  '71-55-6', // 1,1,1-Trichloroethane
+  '56-55-3', // Benz[a]anthracene
+  '50-32-8', // Benzo[a]pyrene
+  '7440-38-2', // Arsenic
+  '7439-92-1', // Lead
+  '7440-43-9', // Cadmium
+  '7439-97-6', // Mercury
+  '18540-29-9', // Chromium(VI)
+  '1332-21-4', // Asbestos
+  '92-87-5', // Benzidine
+  '91-59-8', // 2-Naphthylamine
+]
+
+const normalizeCas = (cas) => String(cas || '').trim()
+
 
 /* ========================================================================== */
 /* PHASE A HELPERS — locations, audit, SDS review, labels, duplicates         */
 /* ========================================================================== */
 
-const joinLocationPath = ({ loc_building, loc_room, loc_cabinet, loc_shelf, location }) => {
-  const parts = [loc_building, loc_room, loc_cabinet, loc_shelf]
+const joinLocationPath = ({ loc_site, loc_building, loc_room, loc_cabinet, loc_shelf, location }) => {
+  const parts = [loc_site, loc_building, loc_room, loc_cabinet, loc_shelf]
     .map((p) => (p || '').trim())
     .filter(Boolean)
   if (parts.length) return parts.join(' / ')
@@ -356,10 +398,29 @@ const joinLocationPath = ({ loc_building, loc_room, loc_cabinet, loc_shelf, loca
 const splitLocationPath = (location) => {
   const raw = (location || '').trim()
   if (!raw) {
-    return { loc_building: '', loc_room: '', loc_cabinet: '', loc_shelf: '', location: '' }
+    return {
+      loc_site: '',
+      loc_building: '',
+      loc_room: '',
+      loc_cabinet: '',
+      loc_shelf: '',
+      location: '',
+    }
   }
   const parts = raw.split(/\s*\/\s*/).map((p) => p.trim()).filter(Boolean)
+  // Support 4-part (legacy) and 5-part (with site)
+  if (parts.length >= 5) {
+    return {
+      loc_site: parts[0] || '',
+      loc_building: parts[1] || '',
+      loc_room: parts[2] || '',
+      loc_cabinet: parts[3] || '',
+      loc_shelf: parts[4] || '',
+      location: raw,
+    }
+  }
   return {
+    loc_site: '',
     loc_building: parts[0] || '',
     loc_room: parts[1] || '',
     loc_cabinet: parts[2] || '',
@@ -2131,6 +2192,51 @@ function App() {
         }
       })
 
+
+      // CAS threshold alerts (EPCRA-style user thresholds)
+      try {
+        const byCas = {}
+        chemicalList.forEach((c) => {
+          if (c.archived || getChemMeta(c.id).archived) return
+          const st = c.lifecycle_status || getChemMeta(c.id).lifecycle_status || 'in_stock'
+          if (st === 'disposed' || st === 'transferred' || st === 'empty') return
+          const cas = (c.cas_number || '').trim()
+          if (!cas) return
+          byCas[cas] = (byCas[cas] || 0) + (Number(c.quantity) || 0)
+        })
+        Object.entries(casThresholds || {}).forEach(([cas, limit]) => {
+          const total = byCas[cas]
+          if (total != null && Number(total) >= Number(limit)) {
+            newlyCreated.push(
+              createNotification(
+                'threshold',
+                'Quantity threshold',
+                `CAS ${cas} total qty ${total} ≥ threshold ${limit}`,
+                cas
+              )
+            )
+          }
+        })
+        // Peroxide test due
+        chemicalList.forEach((c) => {
+          const due = c.peroxide_test_due || getChemMeta(c.id).peroxide_test_due
+          if (!due) return
+          const d = daysUntil(due)
+          if (d !== null && d <= 14) {
+            newlyCreated.push(
+              createNotification(
+                'peroxide_test',
+                'Peroxide test due',
+                `"${c.name}" test due ${due} (${d} day(s))`,
+                c.id
+              )
+            )
+          }
+        })
+      } catch (err) {
+        console.warn('threshold notify failed', err)
+      }
+
       setNotifications((previous) => {
         const existingKeys = new Set(previous.map((n) => `${n.type}-${n.chemId}`))
         const uniqueNew = newlyCreated.filter((n) => !existingKeys.has(`${n.type}-${n.chemId}`))
@@ -2152,7 +2258,7 @@ function App() {
         return [...uniqueNew, ...previous].slice(0, MAX_NOTIFICATIONS)
       })
     },
-    [notificationsEnabled]
+    [notificationsEnabled, casThresholds]
   )
 
   useEffect(() => {
@@ -3230,6 +3336,11 @@ function App() {
         locations: Array.from(r.locations).join('; '),
       }))
       .sort((a, b) => b.totalQty - a.totalQty)
+    const propSet = new Set((prop65List || []).map((x) => String(x || '').trim()))
+    const prop65Hits = active.filter((c) => {
+      const cas = String(c.cas_number || '').trim()
+      return cas && propSet.has(cas)
+    })
     return {
       missingSdsCount: missingSds.length,
       peroxideCount: peroxide.length,
@@ -3237,8 +3348,10 @@ function App() {
       epcraRows,
       missingSds,
       peroxide,
+      prop65Count: prop65Hits.length,
+      prop65Hits,
     }
-  }, [chemicals])
+  }, [chemicals, prop65List])
 
 const compatibilityIssues = useMemo(
     () => buildCompatibilityIssues(chemicals),
@@ -3307,18 +3420,425 @@ const compatibilityIssues = useMemo(
       return
     }
     downloadCSV(`emergency-pack-${new Date().toISOString().slice(0, 10)}.csv`, rows)
+
     showMessage('success', 'Emergency pack CSV downloaded')
   }
+
+  const exportEmergencyPackPdf = () => {
+    const list = (chemicals || [])
+      .filter((c) => !(c.archived || getChemMeta(c.id).archived))
+      .filter((c) => {
+        const s = c.lifecycle_status || getChemMeta(c.id).lifecycle_status || 'in_stock'
+        return s === 'in_stock' || s === 'in_use'
+      })
+    if (!list.length) {
+      showMessage('error', 'No active chemicals for emergency pack')
+      return
+    }
+    try {
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+      const pageWidth = doc.internal.pageSize.getWidth()
+      doc.setFillColor(30, 79, 214)
+      doc.rect(0, 0, pageWidth, 22, 'F')
+      doc.setTextColor(255, 255, 255)
+      doc.setFontSize(14)
+      doc.setFont('helvetica', 'bold')
+      doc.text('Emergency Chemical Inventory Pack', 14, 12)
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'normal')
+      doc.text(new Date().toLocaleString(), 14, 18)
+      doc.setTextColor(15, 23, 42)
+      let y = 30
+      doc.setFontSize(9)
+      list.slice(0, 80).forEach((c, i) => {
+        if (y > 280) {
+          doc.addPage()
+          y = 20
+        }
+        const meta = getChemMeta(c.id)
+        const line1 = `${i + 1}. ${c.name || '—'}  CAS ${c.cas_number || '—'}  Qty ${c.quantity ?? 0} ${c.unit || ''}`
+        const line2 = `Loc: ${c.location || locationKeyOf(c) || '—'}  |  ${(c.signal_word || meta.signal_word || '')} ${(c.h_statements || meta.h_statements || '').slice(0, 60)}`
+        doc.setFont('helvetica', 'bold')
+        doc.text(line1.slice(0, 95), 14, y)
+        y += 5
+        doc.setFont('helvetica', 'normal')
+        doc.setTextColor(80, 80, 80)
+        doc.text(line2.slice(0, 100), 14, y)
+        doc.setTextColor(15, 23, 42)
+        y += 7
+      })
+      doc.save(`emergency-pack-${new Date().toISOString().slice(0, 10)}.pdf`)
+      showMessage('success', 'Emergency pack PDF downloaded')
+    } catch (err) {
+      console.warn(err)
+      showMessage('error', 'PDF export failed')
+    }
+  }
+
+  /** RBAC-lite: admin/owner full; cho for owned containers; auditor read-focused */
+  const effectiveRole = (() => {
+    const r = String(activeOrgRole || '').toLowerCase()
+    if (r === 'owner' || r === 'admin') return 'admin'
+    if (r === 'auditor') return 'auditor'
+    if (r === 'lab_manager' || r === 'cho') return 'cho'
+    if (accountMode === 'personal') return 'admin'
+    return r || 'member'
+  })()
+  const canEditInventory =
+    effectiveRole === 'admin' || effectiveRole === 'cho' || accountMode === 'personal'
+  const canRunAuditTools =
+    effectiveRole === 'admin' || effectiveRole === 'cho' || effectiveRole === 'auditor'
+  const isAuditorOnly = effectiveRole === 'auditor'
 
   const isChoForChemical = (chemical) => {
     const email = (session?.user?.email || '').toLowerCase()
     if (!email) return false
-    if (isOrgAdmin || activeOrgRole === 'owner' || activeOrgRole === 'admin') return true
+    if (effectiveRole === 'admin') return true
     const owner = String(
       chemical?.inventory_owner || getChemMeta(chemical?.id).inventory_owner || ''
     ).toLowerCase()
     return owner && (owner === email || owner.includes(email))
   }
+
+  const saveCasThresholds = (next) => {
+    setCasThresholds(next)
+    try {
+      localStorage.setItem(CAS_THRESHOLDS_KEY, JSON.stringify(next))
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const queueServerAudit = async (action, detail = {}) => {
+    // Best-effort POST; always keep local pushAudit
+    pushAudit(action, detail)
+    const payload = {
+      action,
+      detail,
+      organization_id: activeOrgId || null,
+      at: new Date().toISOString(),
+      source: 'labchemicalinventory',
+    }
+    try {
+      const token = await getAccessToken()
+      if (token) {
+        await fetch(`${API_URL}/audit`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
+        })
+      }
+    } catch {
+      try {
+        const q = loadJsonStorage(SERVER_AUDIT_KEY, [])
+        q.unshift(payload)
+        localStorage.setItem(SERVER_AUDIT_KEY, JSON.stringify(q.slice(0, 200)))
+      } catch {
+        /* ignore */
+      }
+    }
+    // Phase C — LIMS / external webhook (no secrets in browser; URL is user-configured)
+    fireLimsWebhook(payload)
+  }
+
+  const fireLimsWebhook = (payload) => {
+    const url = (limsWebhookUrl || '').trim()
+    if (!url || !/^https?:\/\//i.test(url)) return
+    try {
+      // keepalive so it still sends on navigation
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        mode: 'cors',
+        keepalive: true,
+      }).catch(() => {})
+    } catch {
+      /* ignore CORS/network */
+    }
+  }
+
+  const isProp65Cas = (cas) => {
+    const n = normalizeCas(cas)
+    if (!n) return false
+    return (prop65List || []).some((x) => normalizeCas(x) === n)
+  }
+
+  const saveProp65List = (list) => {
+    setProp65List(list)
+    try {
+      localStorage.setItem(REGULATORY_FLAGS_KEY, JSON.stringify(list))
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const handleSsoProvider = async (provider) => {
+    setSsoBusy(true)
+    try {
+      const redirectTo = window.location.origin
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: { redirectTo },
+      })
+      if (error) throw error
+      showMessage('success', `Redirecting to ${provider}…`)
+    } catch (err) {
+      showMessage(
+        'error',
+        err?.message ||
+          `SSO failed. Enable ${provider} under Supabase Auth → Providers.`
+      )
+    } finally {
+      setSsoBusy(false)
+    }
+  }
+
+  /** Phase C — ERP-style PO CSV: name, cas, quantity, unit, po_number, vendor, location */
+  const parsePoCsv = (textIn) => {
+    const lines = String(textIn || '')
+      .replace(/^\uFEFF/, '')
+      .split(/\r?\n/)
+      .filter((l) => l.trim())
+    if (lines.length < 2) return []
+    const split = (line) => {
+      const cells = []
+      let cur = ''
+      let q = false
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i]
+        if (q) {
+          if (ch === '"' && line[i + 1] === '"') {
+            cur += '"'
+            i++
+          } else if (ch === '"') q = false
+          else cur += ch
+        } else if (ch === '"') q = true
+        else if (ch === ',') {
+          cells.push(cur.trim())
+          cur = ''
+        } else cur += ch
+      }
+      cells.push(cur.trim())
+      return cells
+    }
+    const headers = split(lines[0]).map((h) => h.toLowerCase())
+    const idx = (...names) => {
+      for (const n of names) {
+        const i = headers.indexOf(n)
+        if (i >= 0) return i
+      }
+      return -1
+    }
+    const iName = idx('name', 'chemical', 'description', 'item')
+    const iCas = idx('cas', 'cas_number', 'cas number')
+    const iQty = idx('quantity', 'qty', 'amount')
+    const iUnit = idx('unit', 'uom')
+    const iPo = idx('po', 'po_number', 'purchase_order', 'order')
+    const iVendor = idx('vendor', 'supplier')
+    const iLoc = idx('location', 'ship_to', 'site')
+    if (iName < 0) return []
+    const rows = []
+    for (let r = 1; r < lines.length; r++) {
+      const c = split(lines[r])
+      const name = (c[iName] || '').trim()
+      if (!name) continue
+      rows.push({
+        name,
+        cas_number: iCas >= 0 ? c[iCas] || null : null,
+        quantity: iQty >= 0 ? Number(c[iQty]) || 0 : 0,
+        unit: iUnit >= 0 && c[iUnit] ? c[iUnit] : 'g',
+        po_number: iPo >= 0 ? c[iPo] || '' : '',
+        supplier: iVendor >= 0 ? c[iVendor] || '' : '',
+        location: iLoc >= 0 ? c[iLoc] || '' : '',
+        date_received: new Date().toISOString().slice(0, 10),
+        lifecycle_status: 'in_stock',
+      })
+    }
+    return rows
+  }
+
+  const handlePoImport = async () => {
+    const rows = parsePoCsv(poImportText)
+    if (!rows.length) {
+      showMessage('error', 'No valid PO rows (need header + name column)')
+      return
+    }
+    setPoImportBusy(true)
+    try {
+      const token = await getAccessToken()
+      if (!token) throw new Error('Not signed in')
+      let ok = 0
+      let fail = 0
+      for (const row of rows) {
+        try {
+          const res = await fetch(`${API_URL}/chemicals`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              name: row.name,
+              cas_number: row.cas_number,
+              quantity: row.quantity,
+              unit: row.unit,
+              location: row.location || null,
+              supplier: row.supplier || null,
+              batch_lot: row.po_number ? `PO ${row.po_number}` : null,
+              organization_id:
+                workspaceMode === 'organization' ? activeOrgId : null,
+            }),
+          })
+          if (res.ok) {
+            ok++
+            const saved = await res.json().catch(() => null)
+            if (saved?.id) {
+              setChemMeta(saved.id, {
+                date_received: row.date_received,
+                lifecycle_status: 'in_stock',
+                po_number: row.po_number,
+              })
+            }
+          } else fail++
+        } catch {
+          fail++
+        }
+      }
+      await queueServerAudit('po_import', { ok, fail, rows: rows.length })
+      showMessage(
+        fail ? 'error' : 'success',
+        `PO import: ${ok} added, ${fail} failed`
+      )
+      setShowPoImport(false)
+      setPoImportText('')
+      fetchChemicals(true)
+    } catch (err) {
+      showMessage('error', err.message || 'PO import failed')
+    } finally {
+      setPoImportBusy(false)
+    }
+  }
+
+
+  const handleReceiveComplete = () => {
+    // Opens add form pre-filled for receiving
+    const today = new Date().toISOString().slice(0, 10)
+    setFormData({
+      ...EMPTY_FORM,
+      date_received: today,
+      lifecycle_status: 'in_stock',
+      inventory_owner: session?.user?.email || '',
+    })
+    setEditingId(null)
+    setShowReceiveWizard(false)
+    setShowForm(true)
+    showMessage('success', 'Receiving: fill identity, quantity, location, and SDS')
+  }
+
+  const handleDisposeConfirm = async () => {
+    const chem = (chemicals || []).find((c) => String(c.id) === String(disposeChemId))
+    if (!chem) {
+      showMessage('error', 'Select a chemical to dispose')
+      return
+    }
+    if (isAuditorOnly) {
+      showMessage('error', 'Auditors cannot dispose containers')
+      return
+    }
+    const meta = getChemMeta(chem.id)
+    setChemMeta(chem.id, {
+      ...meta,
+      lifecycle_status: 'disposed',
+      disposed_at: new Date().toISOString(),
+      dispose_reason: disposeReason,
+      dispose_notes: disposeNotes,
+    })
+    // Zero quantity on server when possible
+    try {
+      const token = await getAccessToken()
+      if (token) {
+        await fetch(`${API_URL}/chemicals/${chem.id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ ...chem, quantity: 0, lifecycle_status: 'disposed' }),
+        })
+      }
+    } catch {
+      /* meta still updated */
+    }
+    await queueServerAudit('dispose', {
+      chemical_id: chem.id,
+      chemical_name: chem.name,
+      reason: disposeReason,
+      notes: disposeNotes,
+    })
+    setShowDisposeWizard(false)
+    setDisposeChemId('')
+    setDisposeNotes('')
+    fetchChemicals(true)
+    showMessage('success', `Disposed ${chem.name}`)
+  }
+
+  const handleTransferConfirm = async () => {
+    const chem = (chemicals || []).find((c) => String(c.id) === String(transferChemId))
+    if (!chem || !transferDest.trim()) {
+      showMessage('error', 'Select chemical and destination lab/site')
+      return
+    }
+    if (isAuditorOnly) {
+      showMessage('error', 'Auditors cannot transfer containers')
+      return
+    }
+    const meta = getChemMeta(chem.id)
+    const dest = transferDest.trim()
+    setChemMeta(chem.id, {
+      ...meta,
+      lifecycle_status: 'transferred',
+      transferred_to: dest,
+      transferred_at: new Date().toISOString(),
+      transfer_notes: transferNotes,
+    })
+    try {
+      const token = await getAccessToken()
+      if (token) {
+        const newLoc = dest
+        await fetch(`${API_URL}/chemicals/${chem.id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            ...chem,
+            location: newLoc,
+            lifecycle_status: 'transferred',
+          }),
+        })
+      }
+    } catch {
+      /* ignore */
+    }
+    await queueServerAudit('transfer', {
+      chemical_id: chem.id,
+      chemical_name: chem.name,
+      to: dest,
+      notes: transferNotes,
+    })
+    setShowTransferWizard(false)
+    setTransferChemId('')
+    setTransferDest('')
+    setTransferNotes('')
+    fetchChemicals(true)
+    showMessage('success', `Transferred ${chem.name} → ${dest}`)
+  }
+
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -3497,6 +4017,8 @@ const compatibilityIssues = useMemo(
           provisional: Boolean(formData.provisional),
           signal_word: formData.signal_word || undefined,
           h_statements: formData.h_statements || undefined,
+          peroxide_test_due: formData.peroxide_test_due || undefined,
+          loc_site: formData.loc_site || undefined,
         })
       }
       pushAudit(editingId ? 'chemical_update' : 'chemical_create', {
@@ -3963,6 +4485,8 @@ const compatibilityIssues = useMemo(
       provisional: Boolean(chemical.provisional ?? meta.provisional),
       signal_word: chemical.signal_word || meta.signal_word || '',
       h_statements: chemical.h_statements || meta.h_statements || '',
+      peroxide_test_due: chemical.peroxide_test_due || meta.peroxide_test_due || '',
+      loc_site: path.loc_site || meta.loc_site || '',
     })
     setEditingId(chemical.id)
     setShowForm(true)
@@ -4961,6 +5485,77 @@ const compatibilityIssues = useMemo(
             </div>
           </div>
 
+          <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+            <h3 style={{ marginTop: 0 }}>Regulatory flags (Prop 65 sample)</h3>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              Illustrative CAS list for California Prop 65–style awareness — not a complete legal database.
+              Matched inventory: <strong>{casraiReports.prop65Count ?? 0}</strong>
+            </p>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+              <input
+                className="search-input"
+                style={{ maxWidth: 180 }}
+                placeholder="Add CAS to watchlist"
+                value={prop65Draft}
+                onChange={(e) => setProp65Draft(e.target.value)}
+              />
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                onClick={() => {
+                  const cas = prop65Draft.trim()
+                  if (!cas) return
+                  if (prop65List.includes(cas)) {
+                    showMessage('error', 'CAS already on list')
+                    return
+                  }
+                  saveProp65List([...prop65List, cas])
+                  setProp65Draft('')
+                }}
+              >
+                Add CAS
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                onClick={() => saveProp65List([...PROP65_SEED_CAS])}
+              >
+                Reset to seed list
+              </button>
+            </div>
+            {casraiReports.prop65Hits?.length > 0 && (
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.85rem' }}>
+                {casraiReports.prop65Hits.slice(0, 30).map((c) => (
+                  <li key={c.id}>
+                    <strong>{c.name}</strong> · CAS {c.cas_number}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+            <h3 style={{ marginTop: 0 }}>LIMS / external webhook</h3>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              POST JSON events (dispose, transfer, usage, PO import, audit) to your LIMS or middleware URL.
+              Requires CORS allowance on the receiver.
+            </p>
+            <input
+              className="search-input"
+              placeholder="https://your-lims.example/hooks/inventory"
+              value={limsWebhookUrl}
+              onChange={(e) => {
+                const v = e.target.value
+                setLimsWebhookUrl(v)
+                try {
+                  localStorage.setItem(LIMS_WEBHOOK_KEY, v)
+                } catch {
+                  /* ignore */
+                }
+              }}
+            />
+          </div>
+
           <div className="card" style={{ marginBottom: 16, padding: 16 }}>
             <h3 style={{ marginTop: 0 }}>Missing SDS (active containers)</h3>
             <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
@@ -5014,6 +5609,7 @@ const compatibilityIssues = useMemo(
                       <th>Name</th>
                       <th>CAS</th>
                       <th>Opened</th>
+                      <th>Test due</th>
                       <th>Days open</th>
                       <th>Lifecycle</th>
                       <th></th>
@@ -5029,6 +5625,7 @@ const compatibilityIssues = useMemo(
                           <td>{c.name}</td>
                           <td>{c.cas_number || '—'}</td>
                           <td>{opened}</td>
+                          <td>{c.peroxide_test_due || meta.peroxide_test_due || '—'}</td>
                           <td>{days == null ? '—' : days}</td>
                           <td>{c.lifecycle_status || meta.lifecycle_status || 'in_stock'}</td>
                           <td>
@@ -5049,9 +5646,87 @@ const compatibilityIssues = useMemo(
             <button type="button" className="btn btn-primary btn-sm" onClick={exportEmergencyPackCsv}>
               Download emergency pack CSV
             </button>
+            <button type="button" className="btn btn-primary btn-sm" onClick={exportEmergencyPackPdf}>
+              Download emergency pack PDF
+            </button>
             <button type="button" className="btn btn-ghost btn-sm" onClick={exportCasRollupCsv}>
               Download CAS rollup CSV
             </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowReceiveWizard(true)}>
+              Receive chemical
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowDisposeWizard(true)}>
+              Dispose
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowTransferWizard(true)}>
+              Transfer
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowPoImport(true)}>
+              Import PO CSV
+            </button>
+          </div>
+
+
+          <div className="card" style={{ padding: 16, marginBottom: 16 }}>
+            <h3 style={{ marginTop: 0 }}>CAS quantity thresholds</h3>
+            <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              Alert when total quantity for a CAS (active containers) meets or exceeds a threshold (same unit as stored).
+            </p>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+              <input
+                className="search-input"
+                style={{ maxWidth: 160 }}
+                placeholder="CAS number"
+                value={thresholdDraftCas}
+                onChange={(e) => setThresholdDraftCas(e.target.value)}
+              />
+              <input
+                className="search-input"
+                style={{ maxWidth: 120 }}
+                type="number"
+                placeholder="Threshold"
+                value={thresholdDraftValue}
+                onChange={(e) => setThresholdDraftValue(e.target.value)}
+              />
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                onClick={() => {
+                  const cas = thresholdDraftCas.trim()
+                  const val = Number(thresholdDraftValue)
+                  if (!cas || !Number.isFinite(val) || val <= 0) {
+                    showMessage('error', 'Enter CAS and a positive threshold')
+                    return
+                  }
+                  saveCasThresholds({ ...casThresholds, [cas]: val })
+                  setThresholdDraftCas('')
+                  setThresholdDraftValue('')
+                  showMessage('success', `Threshold set for ${cas}`)
+                }}
+              >
+                Save threshold
+              </button>
+            </div>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.85rem' }}>
+              {Object.keys(casThresholds).length === 0 && <li>No thresholds configured</li>}
+              {Object.entries(casThresholds).map(([cas, val]) => (
+                <li key={cas}>
+                  {cas}: {val}
+                  <button
+                    type="button"
+                    className="btn-sm"
+                    style={{ marginLeft: 8 }}
+                    onClick={() => {
+                      const next = { ...casThresholds }
+                      delete next[cas]
+                      saveCasThresholds(next)
+                    }}
+                  >
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
 
           <div className="card" style={{ padding: 16 }}>
@@ -5610,6 +6285,16 @@ const compatibilityIssues = useMemo(
                       />
                     </div>
                     <div className="form-group">
+                      <label htmlFor="peroxide_test_due">Peroxide test due</label>
+                      <input
+                        id="peroxide_test_due"
+                        name="peroxide_test_due"
+                        type="date"
+                        value={formData.peroxide_test_due || ''}
+                        onChange={handleChange}
+                      />
+                    </div>
+                    <div className="form-group">
                       <label htmlFor="lifecycle_status">Lifecycle status</label>
                       <select
                         id="lifecycle_status"
@@ -5717,6 +6402,13 @@ const compatibilityIssues = useMemo(
                           gap: 8,
                         }}
                       >
+                        <input
+                          name="loc_site"
+                          value={formData.loc_site || ''}
+                          onChange={handleChange}
+                          placeholder="Site / campus"
+                          aria-label="Site"
+                        />
                         <input
                           name="loc_building"
                           value={formData.loc_building || ''}
@@ -7391,6 +8083,171 @@ const compatibilityIssues = useMemo(
 
       {/* ===================== DELETE ACCOUNT ===================== */}
       
+
+
+      {showPoImport && (
+        <div className="modal-overlay" onClick={() => !poImportBusy && setShowPoImport(false)}>
+          <div className="modal-card" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 style={{ margin: 0 }}>Import purchase order CSV</h3>
+              <button type="button" className="icon-btn" onClick={() => setShowPoImport(false)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ padding: 16 }}>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                Headers: name, cas, quantity, unit, po_number, vendor, location
+              </p>
+              <textarea
+                className="search-input"
+                style={{ minHeight: 160, width: '100%', fontFamily: 'monospace', fontSize: 12 }}
+                value={poImportText}
+                onChange={(e) => setPoImportText(e.target.value)}
+                placeholder={'name,cas,quantity,unit,po_number,vendor,location\nAcetone,67-64-1,4,L,PO-1001,Sigma,Bldg A / Lab 2'}
+                disabled={poImportBusy}
+              />
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{ marginTop: 10 }}
+                disabled={poImportBusy}
+                onClick={handlePoImport}
+              >
+                {poImportBusy ? 'Importing…' : 'Import rows'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========== RECEIVE WIZARD ========== */}
+      {showReceiveWizard && (
+        <div className="modal-overlay" onClick={() => setShowReceiveWizard(false)}>
+          <div className="modal-card" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 style={{ margin: 0 }}>Receive chemical</h3>
+              <button type="button" className="icon-btn" onClick={() => setShowReceiveWizard(false)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ padding: 16 }}>
+              <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                Capture at receiving: identity, CAS, quantity, location, date received, and SDS.
+                Continues to the Add Chemical form with receive defaults.
+              </p>
+              <button type="button" className="btn btn-primary" onClick={handleReceiveComplete}>
+                Start receiving form
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========== DISPOSE WIZARD ========== */}
+      {showDisposeWizard && (
+        <div className="modal-overlay" onClick={() => setShowDisposeWizard(false)}>
+          <div className="modal-card" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 style={{ margin: 0 }}>Dispose container</h3>
+              <button type="button" className="icon-btn" onClick={() => setShowDisposeWizard(false)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ padding: 16, display: 'grid', gap: 10 }}>
+              <label className="profile-field">
+                <span>Chemical</span>
+                <select
+                  className="search-input"
+                  value={disposeChemId}
+                  onChange={(e) => setDisposeChemId(e.target.value)}
+                >
+                  <option value="">Select…</option>
+                  {(chemicals || [])
+                    .filter((c) => !(c.archived || getChemMeta(c.id).archived))
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} {c.cas_number ? `(${c.cas_number})` : ''}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="profile-field">
+                <span>Reason</span>
+                <select
+                  className="search-input"
+                  value={disposeReason}
+                  onChange={(e) => setDisposeReason(e.target.value)}
+                >
+                  <option value="empty">Empty</option>
+                  <option value="expired">Expired</option>
+                  <option value="waste">Hazardous waste</option>
+                  <option value="spill">Spill / residual</option>
+                  <option value="other">Other</option>
+                </select>
+              </label>
+              <label className="profile-field">
+                <span>Notes</span>
+                <input
+                  className="search-input"
+                  value={disposeNotes}
+                  onChange={(e) => setDisposeNotes(e.target.value)}
+                  placeholder="Waste stream, manifest #…"
+                />
+              </label>
+              <button type="button" className="btn btn-primary" onClick={handleDisposeConfirm}>
+                Confirm dispose
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========== TRANSFER WIZARD ========== */}
+      {showTransferWizard && (
+        <div className="modal-overlay" onClick={() => setShowTransferWizard(false)}>
+          <div className="modal-card" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 style={{ margin: 0 }}>Transfer container</h3>
+              <button type="button" className="icon-btn" onClick={() => setShowTransferWizard(false)}>✕</button>
+            </div>
+            <div className="modal-body" style={{ padding: 16, display: 'grid', gap: 10 }}>
+              <label className="profile-field">
+                <span>Chemical</span>
+                <select
+                  className="search-input"
+                  value={transferChemId}
+                  onChange={(e) => setTransferChemId(e.target.value)}
+                >
+                  <option value="">Select…</option>
+                  {(chemicals || [])
+                    .filter((c) => !(c.archived || getChemMeta(c.id).archived))
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="profile-field">
+                <span>Destination (site / lab)</span>
+                <input
+                  className="search-input"
+                  value={transferDest}
+                  onChange={(e) => setTransferDest(e.target.value)}
+                  placeholder="e.g. North Campus / Lab B"
+                />
+              </label>
+              <label className="profile-field">
+                <span>Notes</span>
+                <input
+                  className="search-input"
+                  value={transferNotes}
+                  onChange={(e) => setTransferNotes(e.target.value)}
+                />
+              </label>
+              <button type="button" className="btn btn-primary" onClick={handleTransferConfirm}>
+                Confirm transfer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+
       {showProfileModal && (
         <div
           className="modal-overlay"
@@ -7686,6 +8543,37 @@ const compatibilityIssues = useMemo(
               </form>
 
               <hr style={{ margin: '18px 0', border: 0, borderTop: '1px solid var(--border)' }} />
+
+              <h4 style={{ margin: '0 0 8px' }}>Enterprise SSO</h4>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 0 }}>
+                Requires the provider enabled in Supabase Auth (Google, Azure, etc.).
+              </p>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={ssoBusy}
+                  onClick={() => handleSsoProvider('google')}
+                >
+                  Google
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={ssoBusy}
+                  onClick={() => handleSsoProvider('azure')}
+                >
+                  Microsoft
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={ssoBusy}
+                  onClick={() => handleSsoProvider('github')}
+                >
+                  GitHub
+                </button>
+              </div>
 
               <h4 style={{ margin: '0 0 8px' }}>Sessions</h4>
               <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 0 }}>
