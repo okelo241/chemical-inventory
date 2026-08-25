@@ -5950,3 +5950,80 @@ textarea {
   padding-right: 16px !important;
   overflow-x: visible !important;
 }
+
+
+/* Row actions: Edit · Log · ⋯ */
+.actions {
+  overflow: visible !important;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+  overflow: visible;
+}
+.row-actions-menu-wrap {
+  position: relative;
+  overflow: visible;
+  z-index: 5;
+}
+.row-actions-more {
+  min-width: 32px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.row-actions-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 200px;
+  z-index: 10050;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.22);
+}
+[data-theme="dark"] .row-actions-menu {
+  background: #151d2e;
+  border-color: #334155;
+  color: #e8eef7;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+}
+.row-actions-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.875rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+.row-actions-item:hover {
+  background: var(--bg-alt, var(--bg));
+}
+[data-theme="dark"] .row-actions-item:hover {
+  background: #243044;
+}
+.row-actions-item.danger {
+  color: var(--danger, #ef4444);
+}
+.row-actions-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+.table-wrapper {
+  overflow: visible !important;
+}
+.chem-table td.actions {
+  position: relative;
+  z-index: 1;
+}

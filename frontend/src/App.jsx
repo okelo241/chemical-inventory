@@ -1323,6 +1323,7 @@ function App() {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
   const [moreFiltersOpen, setMoreFiltersOpen] = useState(false)
+  const [actionMenuId, setActionMenuId] = useState(null)
   const [sortBy, setSortBy] = useState('name')
   const [viewMode, setViewMode] = useState(() => localStorage.getItem('viewMode') || 'table')
   const [mainView, setMainView] = useState('inventory')
@@ -2079,6 +2080,24 @@ function App() {
   // initialization" in production). Data loading runs in the API-layer effects below.
 
   /* ======================================================================== */
+  /* Close row action menu on outside click / Escape */
+  useEffect(() => {
+    if (!actionMenuId) return undefined
+    const close = () => setActionMenuId(null)
+    const onKey = (e) => {
+      if (e.key === 'Escape') close()
+    }
+    const t = window.setTimeout(() => {
+      document.addEventListener('click', close)
+      document.addEventListener('keydown', onKey)
+    }, 0)
+    return () => {
+      window.clearTimeout(t)
+      document.removeEventListener('click', close)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [actionMenuId])
+
   /* BARCODE / QR HANDLERS (MUST stay inside App)                             */
   /* ======================================================================== */
 
@@ -6211,7 +6230,7 @@ const compatibilityIssues = useMemo(
                   )}
                 </button>
                 {moreFiltersOpen && (
-                  <div className="more-filters-menu" role="menu">
+                  <div className="more-filters-menu" role="menu" style={{ left: 0, right: 'auto', zIndex: 9999 }}>
                     {MORE_FILTERS.map((preset) => (
                       <button
                         key={preset.id}
@@ -7545,64 +7564,174 @@ const compatibilityIssues = useMemo(
                             )}
                           </td>
                           <td className="actions">
-                            {chem.barcode && (
-                              <button className="btn-sm" onClick={() => setShowQrModal(chem)}>
-                                QR
-                              </button>
-                            )}
-                            <button className="btn-sm" onClick={() => openUsageModal(chem)}>
-                              Log
-                            </button>
-                            {canEditChemicals && (
-                              <button className="btn-sm" onClick={() => handleEdit(chem)}>
-                                Edit
-                              </button>
-                            )}
-                            <button className="btn-sm" type="button" onClick={() => printChemicalLabel(chem)}>
-                              Label
-                            </button>
-                            {canEditChemicals && (
-                              showArchived || getChemMeta(chem.id).archived ? (
+                            <div className="row-actions">
+                              {canEditChemicals && (
                                 <button
-                                  className="btn-sm"
                                   type="button"
-                                  onClick={() => handleUnarchiveChemical(chem)}
-                                >
-                                  Restore
-                                </button>
-                              ) : (
-                                <button
                                   className="btn-sm"
-                                  type="button"
-                                  onClick={() => handleArchiveChemical(chem)}
+                                  onClick={() => {
+                                    setActionMenuId(null)
+                                    handleEdit(chem)
+                                  }}
                                 >
-                                  Archive
+                                  Edit
                                 </button>
-                              )
-                            )}
-                            {chem.sds_filename && (
+                              )}
                               <button
-                                className="btn-sm"
                                 type="button"
-                                onClick={() => handleMarkSdsReviewed(chem)}
+                                className="btn-sm"
+                                onClick={() => {
+                                  setActionMenuId(null)
+                                  openUsageModal(chem)
+                                }}
                               >
-                                SDS✓
+                                Log
                               </button>
-                            )}
-                            <button
-                              className="btn-sm"
-                              onClick={() => toggleCollection(chem)}
-                            >
-                              {chem.in_collection ? 'Remove' : 'Collect'}
-                            </button>
-                            {canDeleteChemicals && (
-                              <button
-                                className="btn-sm btn-danger"
-                                onClick={() => handleDelete(chem.id, chem.name)}
-                              >
-                                Delete
-                              </button>
-                            )}
+                              <div className="row-actions-menu-wrap">
+                                <button
+                                  type="button"
+                                  className="btn-sm row-actions-more"
+                                  aria-label="More actions"
+                                  aria-expanded={actionMenuId === chem.id}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setActionMenuId((id) =>
+                                      id === chem.id ? null : chem.id
+                                    )
+                                  }}
+                                >
+                                  ⋯
+                                </button>
+                                {actionMenuId === chem.id && (
+                                  <div
+                                    className="row-actions-menu"
+                                    role="menu"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    {chem.barcode && (
+                                      <button
+                                        type="button"
+                                        role="menuitem"
+                                        className="row-actions-item"
+                                        onClick={() => {
+                                          setActionMenuId(null)
+                                          setShowQrModal(chem)
+                                        }}
+                                      >
+                                        QR code
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      role="menuitem"
+                                      className="row-actions-item"
+                                      onClick={() => {
+                                        setActionMenuId(null)
+                                        printChemicalLabel(chem)
+                                      }}
+                                    >
+                                      Print label
+                                    </button>
+                                    <button
+                                      type="button"
+                                      role="menuitem"
+                                      className="row-actions-item"
+                                      onClick={() => {
+                                        setActionMenuId(null)
+                                        toggleCollection(chem)
+                                      }}
+                                    >
+                                      {chem.in_collection
+                                        ? 'Remove from collection'
+                                        : 'Add to collection'}
+                                    </button>
+                                    {canEditChemicals && (
+                                      showArchived || getChemMeta(chem.id).archived ? (
+                                        <button
+                                          type="button"
+                                          role="menuitem"
+                                          className="row-actions-item"
+                                          onClick={() => {
+                                            setActionMenuId(null)
+                                            handleUnarchiveChemical(chem)
+                                          }}
+                                        >
+                                          Restore
+                                        </button>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          role="menuitem"
+                                          className="row-actions-item"
+                                          onClick={() => {
+                                            setActionMenuId(null)
+                                            handleArchiveChemical(chem)
+                                          }}
+                                        >
+                                          Archive
+                                        </button>
+                                      )
+                                    )}
+                                    {chem.sds_filename && (
+                                      <button
+                                        type="button"
+                                        role="menuitem"
+                                        className="row-actions-item"
+                                        onClick={() => {
+                                          setActionMenuId(null)
+                                          handleMarkSdsReviewed(chem)
+                                        }}
+                                      >
+                                        Mark SDS reviewed
+                                      </button>
+                                    )}
+                                    {(chem.sds_url ||
+                                      getChemMeta(chem.id).sds_url ||
+                                      chem.sds_filename) && (
+                                      <button
+                                        type="button"
+                                        role="menuitem"
+                                        className="row-actions-item"
+                                        onClick={() => {
+                                          setActionMenuId(null)
+                                          const meta = getChemMeta(chem.id)
+                                          const url =
+                                            chem.sds_url ||
+                                            meta.sds_url ||
+                                            null
+                                          if (url) {
+                                            window.open(url, '_blank', 'noopener,noreferrer')
+                                          } else if (chem.sds_filename) {
+                                            showMessage(
+                                              'success',
+                                              `SDS on file: ${chem.sds_filename}`
+                                            )
+                                          }
+                                        }}
+                                      >
+                                        Open SDS
+                                      </button>
+                                    )}
+                                    {canDeleteChemicals && (
+                                      <>
+                                        <div className="row-actions-divider" />
+                                        <button
+                                          type="button"
+                                          role="menuitem"
+                                          className="row-actions-item danger"
+                                          onClick={() => {
+                                            setActionMenuId(null)
+                                            handleDelete(chem.id, chem.name)
+                                          }}
+                                        >
+                                          Delete
+                                        </button>
+                                      </>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
                           </td>
                         </tr>
                       )
