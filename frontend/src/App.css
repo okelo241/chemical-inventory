@@ -6762,3 +6762,25 @@ textarea {
   overflow: visible !important;
   position: static !important;
 }
+
+
+/* Portal menu — always on top of sticky header/table */
+.row-actions-menu--fixed {
+  position: fixed !important;
+  z-index: 2147483646 !important;
+  isolation: isolate;
+  pointer-events: auto !important;
+  background: var(--card, #fff) !important;
+  border: 1px solid var(--border, #e2e8f0) !important;
+  border-radius: 12px !important;
+  min-width: 220px !important;
+  max-height: min(70vh, 360px);
+  overflow-y: auto !important;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.28) !important;
+}
+[data-theme="dark"] .row-actions-menu--fixed {
+  background: #151d2e !important;
+  border-color: #334155 !important;
+  color: #e8eef7 !important;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65) !important;
+}

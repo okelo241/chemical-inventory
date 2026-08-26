@@ -31,6 +31,7 @@
 
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { supabase } from './supabase'
 import Login from './Login'
 import Landing from './Landing'
@@ -7885,7 +7886,8 @@ const compatibilityIssues = useMemo(
                                 >
                                   ⋯
                                 </button>
-                                {String(actionMenuId) === String(chem.id) && (
+                                {String(actionMenuId) === String(chem.id) &&
+                                  createPortal(
                                   <div
                                     className="row-actions-menu row-actions-menu--fixed"
                                     role="menu"
@@ -7894,8 +7896,9 @@ const compatibilityIssues = useMemo(
                                       top: actionMenuPos?.top ?? 0,
                                       left: actionMenuPos?.left ?? 0,
                                       right: 'auto',
-                                      zIndex: 100000,
+                                      zIndex: 2147483646,
                                     }}
+                                    onMouseDown={(e) => e.stopPropagation()}
                                     onClick={(e) => e.stopPropagation()}
                                   >
                                     {chem.barcode && (
@@ -8018,7 +8021,8 @@ const compatibilityIssues = useMemo(
                                         </button>
                                       </>
                                     )}
-                                  </div>
+                                  </div>,
+                                  document.body
                                 )}
                               </div>
                             </div>
