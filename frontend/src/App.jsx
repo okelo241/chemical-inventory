@@ -5564,28 +5564,33 @@ const compatibilityIssues = useMemo(
           </div>
         </div>
 
-        {/* Primary tools — scan, alerts, overflow */}
+        {/* Primary tools — clearly separated: Scan | Alerts | More */}
         <div className="header-tools">
-          <div className="tool-group">
+          <div className="tool-group tool-group--cluster">
             <button
               type="button"
               className="tool-btn tool-btn--scan"
               onClick={() => startScanner()}
               title="Scan barcode or QR"
             >
-              <span aria-hidden="true">📷</span>
+              <span className="tool-btn-ico" aria-hidden="true">📷</span>
               <span className="tool-btn-label">Scan</span>
             </button>
 
             <div className="notif-wrapper" ref={notifRef}>
               <button
                 type="button"
-                className="tool-btn"
+                className="tool-btn tool-btn--icon"
                 onClick={() => setNotifOpen((v) => !v)}
                 title="Notifications"
+                aria-label={unreadCount ? `${unreadCount} notifications` : 'Notifications'}
               >
-                🔔
-                {unreadCount > 0 && <span className="badge">{unreadCount}</span>}
+                <span className="tool-btn-ico" aria-hidden="true">🔔</span>
+                {unreadCount > 0 && (
+                  <span className="header-badge" aria-hidden="true">
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
               </button>
             </div>
 
@@ -5783,7 +5788,7 @@ const compatibilityIssues = useMemo(
                             setHeaderMenuOpen(false)
                           }}
                         >
-                          <span>🏢</span> Create Lab/organization
+                          <span>🏢</span> Create organization
                         </button>
                       )}
                       {activeOrgId && canInviteMembers && (
