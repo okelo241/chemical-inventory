@@ -2140,20 +2140,30 @@ function App() {
 
   /* Close row action menu on outside click / Escape */
   useEffect(() => {
-    if (!actionMenuId) return undefined
-    const close = () => {
+    if (actionMenuId == null || actionMenuId === '') return undefined
+    const onPointer = (e) => {
+      const t = e.target
+      if (!(t instanceof Element)) {
+        setActionMenuId(null)
+        return
+      }
+      // Clicks on ⋯ or inside the menu must not close
+      if (t.closest('.row-actions-more') || t.closest('.row-actions-menu')) return
       setActionMenuId(null)
     }
     const onKey = (e) => {
-      if (e.key === 'Escape') close()
+      if (e.key === 'Escape') setActionMenuId(null)
     }
-    const t = window.setTimeout(() => {
-      document.addEventListener('click', close)
+    // Delay so the opening click cannot immediately dismiss the menu
+    const timer = window.setTimeout(() => {
+      document.addEventListener('mousedown', onPointer, true)
+      document.addEventListener('touchstart', onPointer, true)
       document.addEventListener('keydown', onKey)
-    }, 0)
+    }, 50)
     return () => {
-      window.clearTimeout(t)
-      document.removeEventListener('click', close)
+      window.clearTimeout(timer)
+      document.removeEventListener('mousedown', onPointer, true)
+      document.removeEventListener('touchstart', onPointer, true)
       document.removeEventListener('keydown', onKey)
     }
   }, [actionMenuId])
@@ -7839,11 +7849,11 @@ const compatibilityIssues = useMemo(
                                   type="button"
                                   className="btn-sm row-actions-more"
                                   aria-label="More actions"
-                                  aria-expanded={actionMenuId === chem.id}
+                                  aria-expanded={String(actionMenuId) === String(chem.id)}
                                   onClick={(e) => {
                                     e.stopPropagation()
                                     e.preventDefault()
-                                    if (actionMenuId === chem.id) {
+                                    if (String(actionMenuId) === String(chem.id)) {
                                       setActionMenuId(null)
                                       return
                                     }
@@ -7857,32 +7867,32 @@ const compatibilityIssues = useMemo(
                                     }
                                     // Prefer below; flip up if near bottom
                                     const spaceBelow = window.innerHeight - rect.bottom
-                                    const top =
-                                      spaceBelow < 260 && rect.top > 260
-                                        ? Math.max(pad, rect.top - 8)
-                                        : rect.bottom + 6
-                                    const openUp = spaceBelow < 260 && rect.top > 260
-                                    setActionMenuPos({
-                                      top: openUp ? undefined : top,
-                                      bottom: openUp
-                                        ? window.innerHeight - rect.top + 6
-                                        : undefined,
-                                      left,
-                                    })
+                                    const openUp = spaceBelow < 220 && rect.top > 220
+                                    const menuH = 240
+                                    if (openUp) {
+                                      setActionMenuPos({
+                                        top: Math.max(pad, rect.top - menuH - 6),
+                                        left,
+                                      })
+                                    } else {
+                                      setActionMenuPos({
+                                        top: rect.bottom + 6,
+                                        left,
+                                      })
+                                    }
                                     setActionMenuId(chem.id)
                                   }}
                                 >
                                   ⋯
                                 </button>
-                                {actionMenuId === chem.id && (
+                                {String(actionMenuId) === String(chem.id) && (
                                   <div
                                     className="row-actions-menu row-actions-menu--fixed"
                                     role="menu"
                                     style={{
                                       position: 'fixed',
-                                      top: actionMenuPos.top,
-                                      bottom: actionMenuPos.bottom,
-                                      left: actionMenuPos.left,
+                                      top: actionMenuPos?.top ?? 0,
+                                      left: actionMenuPos?.left ?? 0,
                                       right: 'auto',
                                       zIndex: 100000,
                                     }}
