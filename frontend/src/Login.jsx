@@ -253,8 +253,15 @@ function Login({
   }, [])
 
   const isPasswordValid = useCallback((value) => {
-    return typeof value === 'string' && value.length >= 6
+    if (typeof value !== 'string' || value.length < 8) return false
+    // Require letter + number for stronger accounts / invite resets
+    if (!/[A-Za-z]/.test(value)) return false
+    if (!/[0-9]/.test(value)) return false
+    return true
   }, [])
+
+  const passwordStrengthHint =
+    'At least 8 characters, including a letter and a number'
 
   const isNameValid = useCallback((value) => {
     return typeof value === 'string' && value.trim().length >= 2
@@ -665,7 +672,7 @@ function Login({
         } else if (!isEmailValid(email)) {
           setError('Please enter a valid email address.')
         } else if (!isPasswordValid(password)) {
-          setError('Password must be at least 6 characters long.')
+          setError('Use 8+ characters with a letter and a number long.')
         } else if (!doPasswordsMatch) {
           setError('Passwords do not match.')
         } else {
@@ -1088,7 +1095,7 @@ function Login({
                         onBlur={() => setNewPasswordFocused(false)}
                         placeholder=" "
                         required
-                        minLength={6}
+                        minLength={8}
                         disabled={loading}
                         autoComplete="new-password"
                         aria-invalid={newPasswordHasError}
@@ -1110,7 +1117,7 @@ function Login({
                     </div>
                     {newPasswordHasError && (
                       <p className="auth-field-hint auth-field-hint--error">
-                        Password must be at least 6 characters
+                        Use 8+ characters with a letter and a number
                       </p>
                     )}
                   </div>
@@ -1153,7 +1160,7 @@ function Login({
                         onBlur={() => setConfirmNewFocused(false)}
                         placeholder=" "
                         required
-                        minLength={6}
+                        minLength={8}
                         disabled={loading}
                         autoComplete="new-password"
                         aria-invalid={confirmNewHasError}
@@ -1207,7 +1214,7 @@ function Login({
                     onBlur={() => setNewPasswordFocused(false)}
                     placeholder=" "
                     required
-                    minLength={6}
+                    minLength={8}
                     disabled={loading}
                     autoComplete="new-password"
                     autoFocus
@@ -1223,7 +1230,7 @@ function Login({
                 </div>
                 {newPasswordHasError && (
                   <p className="auth-field-hint auth-field-hint--error">
-                    Password must be at least 6 characters
+                    Use 8+ characters with a letter and a number
                   </p>
                 )}
               </div>
@@ -1248,7 +1255,7 @@ function Login({
                     onBlur={() => setConfirmNewFocused(false)}
                     placeholder=" "
                     required
-                    minLength={6}
+                    minLength={8}
                     disabled={loading}
                     autoComplete="new-password"
                   />
@@ -1489,7 +1496,7 @@ function Login({
                     onBlur={() => setPasswordFocused(false)}
                     placeholder=" "
                     required
-                    minLength={6}
+                    minLength={8}
                     disabled={loading}
                     autoComplete={
                       mode === 'login' ? 'current-password' : 'new-password'
@@ -1510,7 +1517,7 @@ function Login({
                 </div>
                 {passwordHasError && (
                   <p className="auth-field-hint auth-field-hint--error">
-                    Password must be at least 6 characters
+                    Use 8+ characters with a letter and a number
                   </p>
                 )}
               </div>
@@ -1553,7 +1560,7 @@ function Login({
                       onBlur={() => setConfirmFocused(false)}
                       placeholder=" "
                       required
-                      minLength={6}
+                      minLength={8}
                       disabled={loading}
                       autoComplete="new-password"
                       aria-invalid={confirmHasError}

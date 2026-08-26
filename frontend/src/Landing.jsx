@@ -14,6 +14,145 @@ import ghs08 from './assets/Pictograms/health_hazard.gif'
 import ghs09 from './assets/Pictograms/GHS-pictogram-pollu.svg.webp'
 import biohazard from './assets/Pictograms/biohazardous_infectious_materials.gif'
 
+
+const FREE_COMPAT_RULES = [
+  { a: 'Flammable liquid', b: 'Oxidizer', risk: 'High', reason: 'Fire / runaway oxidation risk — store apart' },
+  { a: 'Flammable liquid', b: 'Mineral acid', risk: 'High', reason: 'Acids can generate heat/hydrogen with some organics' },
+  { a: 'Oxidizer', b: 'Organic peroxide', risk: 'High', reason: 'Severe fire/explosion risk' },
+  { a: 'Mineral acid', b: 'Cyanide', risk: 'High', reason: 'Toxic gas evolution possible' },
+  { a: 'Mineral acid', b: 'Base', risk: 'Medium', reason: 'Exothermic neutralization — segregate concentrates' },
+  { a: 'Water-reactive', b: 'Aqueous solution', risk: 'High', reason: 'Violent reaction with water/moisture' },
+  { a: 'Flammable liquid', b: 'Pyrophoric', risk: 'High', reason: 'Extreme ignition risk' },
+]
+
+const FREE_CLASSES = [
+  'Flammable liquid',
+  'Oxidizer',
+  'Mineral acid',
+  'Base',
+  'Organic peroxide',
+  'Water-reactive',
+  'Cyanide',
+  'Aqueous solution',
+  'Pyrophoric',
+  'Toxic',
+]
+
+
+function FreeGhsLabelTool() {
+  const [name, setName] = useState('Acetone')
+  const [cas, setCas] = useState('67-64-1')
+  const [signal, setSignal] = useState('Danger')
+  const printLabel = () => {
+    const html = `<!DOCTYPE html><html><head><title>GHS label</title>
+<style>
+body{font-family:system-ui,sans-serif;padding:24px}
+.label{width:4in;border:2px solid #0f172a;padding:14px;border-radius:4px}
+.name{font-size:16pt;font-weight:700}
+.cas{font-size:11pt;color:#334155;margin-top:6px}
+.signal{display:inline-block;margin-top:10px;padding:3px 10px;background:#0f172a;color:#fff;font-weight:700}
+.note{margin-top:12px;font-size:8pt;color:#64748b}
+</style></head><body>
+<div class="label">
+  <div class="name">${(name || 'Chemical').replace(/</g,'')}</div>
+  <div class="cas">CAS ${(cas || '—').replace(/</g,'')}</div>
+  <div class="signal">${(signal || '').replace(/</g,'')}</div>
+  <div class="note">Educational secondary label · Verify against manufacturer SDS</div>
+</div>
+<p><button onclick="window.print()">Print</button></p>
+</body></html>`
+    const w = window.open('', '_blank')
+    if (w) {
+      w.document.write(html)
+      w.document.close()
+    }
+  }
+  return (
+    <div className="free-tool-card">
+      <div className="free-tool-grid">
+        <label className="free-tool-field">
+          <span>Chemical name</span>
+          <input value={name} onChange={(e) => setName(e.target.value)} />
+        </label>
+        <label className="free-tool-field">
+          <span>CAS number</span>
+          <input value={cas} onChange={(e) => setCas(e.target.value)} />
+        </label>
+      </div>
+      <label className="free-tool-field" style={{ textAlign: 'left', marginBottom: 12 }}>
+        <span>Signal word</span>
+        <select value={signal} onChange={(e) => setSignal(e.target.value)}>
+          <option>Danger</option>
+          <option>Warning</option>
+          <option value="">(none)</option>
+        </select>
+      </label>
+      <button type="button" className="btn btn-primary" onClick={printLabel}>
+        Print GHS-style label
+      </button>
+    </div>
+  )
+}
+
+function FreeCompatTool({ onGetStarted }) {
+  const [classA, setClassA] = useState('Flammable liquid')
+  const [classB, setClassB] = useState('Oxidizer')
+  const result = (() => {
+    if (!classA || !classB || classA === classB) {
+      return { risk: 'None', reason: 'Select two different classes to check.' }
+    }
+    for (const r of FREE_COMPAT_RULES) {
+      if (
+        (r.a === classA && r.b === classB) ||
+        (r.a === classB && r.b === classA)
+      ) {
+        return r
+      }
+    }
+    return {
+      risk: 'Low / unknown',
+      reason:
+        'No high-priority rule in this simplified public checker. Still verify SDS Sections 7 & 10 and local EHS rules.',
+    }
+  })()
+
+  const riskClass =
+    result.risk === 'High' ? 'high' : result.risk === 'Medium' ? 'medium' : 'ok'
+
+  return (
+    <div className="free-tool-card">
+      <div className="free-tool-grid">
+        <label className="free-tool-field">
+          <span>Class A</span>
+          <select value={classA} onChange={(e) => setClassA(e.target.value)}>
+            {FREE_CLASSES.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </label>
+        <label className="free-tool-field">
+          <span>Class B</span>
+          <select value={classB} onChange={(e) => setClassB(e.target.value)}>
+            {FREE_CLASSES.map((c) => (
+              <option key={`b-${c}`} value={c}>{c}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className={`free-tool-result free-tool-result--${riskClass}`}>
+        <strong>{result.risk}</strong>
+        <p>{result.reason}</p>
+      </div>
+      <p className="free-tool-footnote">
+        Full inventory software (free) tracks every bottle, blocks high-risk co-storage, and logs usage for your lab.
+      </p>
+      <button type="button" className="btn btn-primary" onClick={() => onGetStarted?.('personal')}>
+        Open free inventory →
+      </button>
+    </div>
+  )
+}
+
 function Landing({ onGetStarted }) {
   const [showBackToTop, setShowBackToTop] = useState(false)
   const [theme, setTheme] = useState(() => {
@@ -194,6 +333,8 @@ function Landing({ onGetStarted }) {
         </div>
         <div className="nav-links">
           <a href="#product">Product</a>
+          <a href="#compat-tool">Free checker</a>
+          <a href="#ghs-label-tool">GHS label</a>
           <a href="#features">Features</a>
           <a href="#storage-guide">Storage Guide</a>
           <a href="#safety-measures">Safety Measures</a>
@@ -254,7 +395,7 @@ function Landing({ onGetStarted }) {
             </button>
           </div>
           <p className="hero-note">
-            Free for individuals · Organization workspaces for teams · No credit card
+            100% free right now · Individuals & lab teams · No credit card
           </p>
           <div className="hero-cta-pills">
             <button
@@ -408,7 +549,37 @@ function Landing({ onGetStarted }) {
         </div>
       </section>
 
-      {/* ===================== TRUST BAR ===================== */}
+
+      {/* ===================== FREE COMPATIBILITY TOOL ===================== */}
+      <section id="compat-tool" className="free-tool-section">
+        <div className="section-inner">
+          <div className="section-header" style={{ textAlign: 'center' }}>
+            <p className="free-tool-badge">Free public tool · No account required</p>
+            <h2>Chemical storage compatibility check</h2>
+            <p className="section-lead">
+              Pick two hazard classes. Get an instant advisory on whether they should share a cabinet.
+              Educational guidance — always confirm with SDS and your Chemical Hygiene Plan.
+            </p>
+          </div>
+          <FreeCompatTool onGetStarted={onGetStarted} />
+        </div>
+      </section>
+
+      
+      <section id="ghs-label-tool" className="free-tool-section">
+        <div className="section-inner">
+          <div className="section-header" style={{ textAlign: 'center' }}>
+            <p className="free-tool-badge">Free public tool · No account required</p>
+            <h2>GHS-style label helper</h2>
+            <p className="section-lead">
+              Enter a name and CAS to print a simple educational secondary label.
+              Always match the manufacturer label and SDS for workplace use.
+            </p>
+          </div>
+          <FreeGhsLabelTool />
+        </div>
+      </section>
+{/* ===================== TRUST BAR ===================== */}
       <section className="trust-bar">
         <div className="trust-item">🔒 Private accounts</div>
         <div className="trust-item">📄 SDS linked to every record</div>

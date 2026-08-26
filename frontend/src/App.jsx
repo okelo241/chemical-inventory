@@ -41,6 +41,19 @@ import { Html5Qrcode } from 'html5-qrcode'
 import { QRCodeSVG } from 'qrcode.react'
 import appLogo from './assets/logo.jpg'
 import './App.css'
+import {
+  parseLabelText,
+  conflictsAtLocation,
+  buildAvery5160Html,
+  buildReorderLines,
+  reorderRequestHtml,
+  roomHazardTotals,
+  buildEmergencyBinderHtml,
+  getDemoChemicals,
+  loadOfflineUsageQueue,
+  saveOfflineUsageQueue,
+  enqueueOfflineUsage,
+} from './competitiveFeatures'
 
 /* -------------------------------------------------------------------------- */
 /* PICTOGRAM ASSETS                                                           */
@@ -1376,6 +1389,7 @@ function App() {
   const [exportOpen, setExportOpen] = useState(false)
   const [compatOpen, setCompatOpen] = useState(false)
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false)
+  const [headerMenuPos, setHeaderMenuPos] = useState({ top: 48, left: 0 })
   const [locationFilter, setLocationFilter] = useState('')
   const [hazardFilter, setHazardFilter] = useState('')
 
@@ -1475,6 +1489,27 @@ function App() {
   /* Phase A/B/C operational state */
   const [reconChecks, setReconChecks] = useState({})
   const [showReceiveWizard, setShowReceiveWizard] = useState(false)
+  const [showChemSnap, setShowChemSnap] = useState(false)
+  const [chemSnapText, setChemSnapText] = useState('')
+  const [chemSnapPreview, setChemSnapPreview] = useState(null)
+  const [chemSnapImageUrl, setChemSnapImageUrl] = useState(null)
+  const [continuousScan, setContinuousScan] = useState(false)
+  const [scanTargetLocation, setScanTargetLocation] = useState('')
+  const [showReorderPanel, setShowReorderPanel] = useState(false)
+  const [showThresholdPanel, setShowThresholdPanel] = useState(false)
+  const [shelfAuditMode, setShelfAuditMode] = useState(false)
+  const [shelfAuditFound, setShelfAuditFound] = useState(() => new Set())
+  const [offlineQueueCount, setOfflineQueueCount] = useState(0)
+
+  const [flammableRoomLimit, setFlammableRoomLimit] = useState(() => {
+    try {
+      const v = localStorage.getItem('flammableRoomLimit')
+      return v ? Number(v) : 20
+    } catch {
+      return 20
+    }
+  })
+
   const [showDisposeWizard, setShowDisposeWizard] = useState(false)
   const [showTransferWizard, setShowTransferWizard] = useState(false)
   const [disposeChemId, setDisposeChemId] = useState('')
@@ -1855,8 +1890,8 @@ function App() {
       setProfileMsg({ type: 'error', text: 'Current password is required when setting a new password.' })
       return
     }
-    if (!profileNewPassword || profileNewPassword.length < 6) {
-      setProfileMsg({ type: 'error', text: 'New password must be at least 6 characters' })
+    if (!profileNewPassword || profileNewPassword.length < 8) {
+      setProfileMsg({ type: 'error', text: 'New password must be at least 8 characters with a letter and a number' })
       return
     }
     if (profileNewPassword !== profileConfirmPassword) {
@@ -2180,6 +2215,89 @@ function App() {
     showMessage('success', 'Barcode generated — remember to Save the chemical')
   }
 
+  const evaluateScanCompatibility = useCallback(
+    (chem) => {
+      if (!chem) return []
+      const loc = scanTargetLocation || chem.location || ''
+      if (!loc) return []
+      try {
+        const classes =
+          typeof resolveEffectiveClasses === 'function'
+            ? resolveEffectiveClasses(chem)
+            : chem.chemical_classes || []
+        return conflictsAtLocation({
+          chemicals,
+          locationKey: loc,
+          incomingClasses: classes,
+          getClasses: (c) =>
+            typeof resolveEffectiveClasses === 'function'
+              ? resolveEffectiveClasses(c)
+              : c.chemical_classes || [],
+          rules: CLASS_COMPATIBILITY_RULES,
+          excludeId: chem.id,
+        })
+      } catch (e) {
+        console.warn('scan compatibility', e)
+        return []
+      }
+    },
+    [chemicals, scanTargetLocation]
+  )
+
+  const handleDecodedScan = useCallback(
+    (decodedText, { stopAfter = true } = {}) => {
+      setScanResult(decodedText)
+      const match = (chemicals || []).find(
+        (c) =>
+          c.barcode === decodedText ||
+          c.container_code === decodedText ||
+          String(c.id) === String(decodedText)
+      )
+      if (!match) {
+        showMessage('error', `No chemical found with code: ${decodedText}`)
+        return
+      }
+      const issues = evaluateScanCompatibility(match)
+      const high = issues.filter((i) => String(i.risk).toLowerCase() === 'high')
+      if (high.length) {
+        const lines = high
+          .slice(0, 4)
+          .map((i) => `• ${i.otherName}: ${i.reason}`)
+          .join('\n')
+        window.alert(
+          `⚠ STORAGE CONFLICT for "${match.name}"${scanTargetLocation ? ` → ${scanTargetLocation}` : ''}\n\n${lines}\n\nDo not store incompatible materials in the same cabinet.`
+        )
+        showMessage('error', `Compatibility risk: ${match.name}`)
+      } else if (issues.length) {
+        showMessage('warning', `Check storage for ${match.name} (${issues.length} note(s))`)
+      } else {
+        showMessage('success', `Found: ${match.name}`)
+      }
+      setSearch(match.name)
+      setFilter('all')
+      setMainView('inventory')
+      if (shelfAuditMode) {
+        setShelfAuditFound((prev) => {
+          const next = new Set(prev)
+          next.add(String(match.barcode || match.id))
+          return next
+        })
+      }
+      if (stopAfter && !continuousScan) {
+        if (html5QrCodeRef.current) {
+          html5QrCodeRef.current
+            .stop()
+            .then(() => {
+              html5QrCodeRef.current = null
+            })
+            .catch(() => {})
+        }
+        setShowScanner(false)
+      }
+    },
+    [chemicals, continuousScan, evaluateScanCompatibility, scanTargetLocation, shelfAuditMode]
+  )
+
   const startScanner = async () => {
     setShowScanner(true)
     setScanResult(null)
@@ -2191,21 +2309,7 @@ function App() {
           { facingMode: 'environment' },
           { fps: 10, qrbox: { width: 250, height: 250 } },
           (decodedText) => {
-            setScanResult(decodedText)
-            html5QrCode.stop().then(() => {
-              html5QrCodeRef.current = null
-            }).catch(() => {})
-
-            const match = chemicals.find((c) => c.barcode === decodedText)
-            if (match) {
-              setSearch(match.name)
-              setFilter('all')
-              setMainView('inventory')
-              showMessage('success', `Found: ${match.name}`)
-              setShowScanner(false)
-            } else {
-              showMessage('error', `No chemical found with code: ${decodedText}`)
-            }
+            handleDecodedScan(decodedText, { stopAfter: !continuousScan })
           },
           () => {}
         )
@@ -2216,6 +2320,227 @@ function App() {
       }
     }, 300)
   }
+
+  const openChemSnap = () => {
+    setChemSnapText('')
+    setChemSnapPreview(null)
+    setChemSnapImageUrl(null)
+    setShowChemSnap(true)
+  }
+
+  const applyChemSnapParse = () => {
+    const draft = parseLabelText(chemSnapText)
+    setChemSnapPreview(draft)
+  }
+
+  const commitChemSnapToForm = async () => {
+    const draft = chemSnapPreview || parseLabelText(chemSnapText)
+    if (!draft.name && !draft.cas_number) {
+      showMessage('error', 'Add label text or a clear name/CAS first')
+      return
+    }
+    setFormData((prev) => ({
+      ...prev,
+      ...EMPTY_FORM,
+      name: draft.name || prev.name,
+      cas_number: draft.cas_number || '',
+      supplier: draft.supplier || '',
+      batch_lot: draft.batch_lot || '',
+      signal_word: draft.signal_word || '',
+      quantity: draft.quantity || '',
+      unit: draft.unit || 'g',
+      hazard_notes: draft.hazard_notes || '',
+      date_received: new Date().toISOString().slice(0, 10),
+      lifecycle_status: 'in_stock',
+      provisional: true,
+    }))
+    setEditingId(null)
+    setShowChemSnap(false)
+    setShowForm(true)
+    showMessage('success', 'ChemSnap draft loaded — confirm fields and run PubChem auto-fill')
+    // Best-effort PubChem if CAS present
+    if (draft.cas_number) {
+      try {
+        // reuse existing lookup if present after form opens
+        setTimeout(() => {
+          const casInput = document.getElementById('cas_number')
+          if (casInput) casInput.focus()
+        }, 200)
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  const printAveryLabels = (list) => {
+    const items = (list || chemicals || []).filter((c) => !c.archived).slice(0, 30)
+    if (!items.length) {
+      showMessage('error', 'No chemicals to print')
+      return
+    }
+    const html = buildAvery5160Html(items)
+    const w = window.open('', '_blank')
+    if (!w) {
+      showMessage('error', 'Pop-up blocked — allow pop-ups to print labels')
+      return
+    }
+    w.document.write(html)
+    w.document.close()
+  }
+
+  const openReorderPanel = () => setShowReorderPanel(true)
+
+  const printEmergencyBinder = () => {
+    const html = buildEmergencyBinderHtml(chemicals || [], {
+      title: `${activeOrgName || 'Lab'} — Emergency chemical list`,
+    })
+    const w = window.open('', '_blank')
+    if (!w) {
+      showMessage('error', 'Pop-up blocked — allow pop-ups to print the emergency binder')
+      return
+    }
+    w.document.write(html)
+    w.document.close()
+    try {
+      queueServerAudit('emergency_binder', { count: (chemicals || []).length })
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const startShelfAudit = () => {
+    setShelfAuditFound(new Set())
+    setShelfAuditMode(true)
+    setContinuousScan(true)
+    showMessage('success', 'Shelf audit on: scan each bottle. Found codes are checked off.')
+    startScanner()
+  }
+
+  const loadDemoData = async () => {
+    if (!canAddChemicals) {
+      showMessage('error', 'Only admins can load demo chemicals')
+      return
+    }
+    if (!window.confirm('Add 3 demo chemicals (Acetone, NaCl, H₂O₂) to this workspace?')) return
+    const token = await getAccessToken()
+    if (!token) {
+      showMessage('error', 'Not signed in')
+      return
+    }
+    const demos = getDemoChemicals()
+    let ok = 0
+    for (const d of demos) {
+      try {
+        const payload = {
+          ...d,
+          organization_id: workspaceMode === 'organization' ? activeOrgId : null,
+        }
+        const res = await fetch(`${API_URL}/chemicals`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
+        })
+        if (res.ok) ok += 1
+      } catch (e) {
+        console.warn('demo chem failed', e)
+      }
+    }
+    await fetchChemicals(true)
+    showMessage('success', `Loaded ${ok} demo chemical(s)`)
+  }
+
+  const flushOfflineUsageQueue = async () => {
+    const q = loadOfflineUsageQueue()
+    if (!q.length) return
+    const token = await getAccessToken()
+    if (!token) return
+    const remaining = []
+    for (const item of q) {
+      try {
+        const res = await fetch(`${API_URL}/transactions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(item.payload || item),
+        })
+        if (!res.ok) remaining.push(item)
+      } catch {
+        remaining.push(item)
+      }
+    }
+    saveOfflineUsageQueue(remaining)
+    setOfflineQueueCount(remaining.length)
+    if (q.length !== remaining.length) {
+      showMessage('success', `Synced ${q.length - remaining.length} offline usage log(s)`)
+      fetchTransactions?.()
+    }
+  }
+
+  useEffect(() => {
+    try {
+      setOfflineQueueCount(loadOfflineUsageQueue().length)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  useEffect(() => {
+    const onOnline = () => {
+      flushOfflineUsageQueue()
+    }
+    window.addEventListener('online', onOnline)
+    // try once on mount if online
+    if (typeof navigator !== 'undefined' && navigator.onLine) {
+      const t = setTimeout(() => flushOfflineUsageQueue(), 2000)
+      return () => {
+        clearTimeout(t)
+        window.removeEventListener('online', onOnline)
+      }
+    }
+    return () => window.removeEventListener('online', onOnline)
+  }, [session])
+
+
+  const printReorderRequest = () => {
+    const lines = buildReorderLines(chemicals || [])
+    if (!lines.length) {
+      showMessage('error', 'No chemicals at or below min stock')
+      return
+    }
+    const html = reorderRequestHtml(lines, {
+      labName: activeOrgName || 'Laboratory',
+      requester: session?.user?.email || '',
+    })
+    const w = window.open('', '_blank')
+    if (!w) {
+      showMessage('error', 'Pop-up blocked')
+      return
+    }
+    w.document.write(html)
+    w.document.close()
+    try {
+      queueServerAudit('reorder_request', { lines: lines.length })
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const thresholdRows = useMemo(() => {
+    try {
+      return roomHazardTotals(chemicals || [], (c) =>
+        typeof resolveEffectiveClasses === 'function'
+          ? resolveEffectiveClasses(c)
+          : c.chemical_classes || []
+      )
+    } catch {
+      return []
+    }
+  }, [chemicals])
 
   const stopScanner = () => {
     if (html5QrCodeRef.current) {
@@ -3861,18 +4186,22 @@ const compatibilityIssues = useMemo(
 
 
   const handleReceiveComplete = () => {
-    // Opens add form pre-filled for receiving
+    // Opens add form pre-filled for receiving — SDS required or provisional
     const today = new Date().toISOString().slice(0, 10)
     setFormData({
       ...EMPTY_FORM,
       date_received: today,
       lifecycle_status: 'in_stock',
+      provisional: true,
       inventory_owner: session?.user?.email || '',
     })
     setEditingId(null)
     setShowReceiveWizard(false)
     setShowForm(true)
-    showMessage('success', 'Receiving: fill identity, quantity, location, and SDS')
+    showMessage(
+      'success',
+      'Receiving started: set name/CAS, quantity, full location, then SDS or keep provisional'
+    )
   }
 
   const handleDisposeConfirm = async () => {
@@ -4264,6 +4593,10 @@ const compatibilityIssues = useMemo(
 
   const handleSdsUpload = async (chemicalId, file) => {
     if (!file) return
+    if (isOrgWorkspace && !canManageOrg) {
+      showMessage('error', 'Only organization admins can upload SDS files')
+      return
+    }
     if (file.type !== 'application/pdf') {
       showMessage('error', 'Only PDF files are allowed for SDS uploads')
       return
@@ -4402,9 +4735,18 @@ const compatibilityIssues = useMemo(
         })
         if (!txRes.ok) {
           console.warn('POST /transactions failed', txRes.status)
+          enqueueOfflineUsage({ payload: transactionPayload })
+          setOfflineQueueCount(loadOfflineUsageQueue().length)
         }
       } catch {
-        // Transactions endpoint may be missing — still keep local history
+        // Offline or API down — queue for later sync
+        try {
+          enqueueOfflineUsage({ payload: transactionPayload })
+          setOfflineQueueCount(loadOfflineUsageQueue().length)
+          showMessage('warning', 'Usage saved offline — will sync when connection returns')
+        } catch {
+          /* ignore */
+        }
       }
 
       setTransactions((prev) => [
@@ -5187,7 +5529,7 @@ const compatibilityIssues = useMemo(
       {/* Toast */}
       {message && (
         <div className={`toast toast-${message.type}`} key={message.id}>
-          <span className="toast-icon">{message.type === 'success' ? '✓' : '✕'}</span>
+          <span className="toast-icon">{message.type === 'success' ? '✓' : message.type === 'warning' ? '!' : '✕'}</span>
           <span>{message.text}</span>
         </div>
       )}
@@ -5200,7 +5542,7 @@ const compatibilityIssues = useMemo(
           </div>
           <div className="brand-text">
             <h1>Chemical Inventory</h1>
-            <span>Stock · Hazards · SDS · Compatibility</span>
+            <span>Stock · Hazards · SDS · Compatibility · Free</span>
           </div>
         </div>
 
@@ -5237,30 +5579,37 @@ const compatibilityIssues = useMemo(
             >
               <button
                 className={`tool-btn ${headerMenuOpen ? 'active' : ''}`}
-                onClick={() => setHeaderMenuOpen((v) => !v)}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  if (headerMenuOpen) {
+                    setHeaderMenuOpen(false)
+                    return
+                  }
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  const w = 268
+                  let left = rect.right - w
+                  if (left < 8) left = 8
+                  setHeaderMenuPos({ top: rect.bottom + 8, left })
+                  setHeaderMenuOpen(true)
+                }}
                 title="More actions"
                 aria-haspopup="menu"
                 aria-expanded={headerMenuOpen}
               >
                 ⋯
               </button>
-              {headerMenuOpen && (
+              {headerMenuOpen &&
+                createPortal(
                 <div
-                  className="header-menu-dropdown"
+                  className="header-menu-dropdown header-menu-dropdown--portal"
                   role="menu"
                   style={{
-                    position: 'absolute',
-                    top: 'calc(100% + 8px)',
-                    right: 0,
-                    minWidth: 240,
-                    background: 'var(--panel, var(--bg-elevated, #ffffff))',
-                    color: 'var(--text, #0f172a)',
-                    border: '1px solid var(--border, #e2e8f0)',
-                    borderRadius: 12,
-                    boxShadow: '0 12px 40px rgba(15, 23, 42, 0.2)',
-                    padding: 6,
-                    zIndex: 6000,
+                    position: 'fixed',
+                    top: headerMenuPos.top,
+                    left: headerMenuPos.left,
+                    zIndex: 2147483000,
                   }}
+                  onMouseDown={(e) => e.stopPropagation()}
                 >
                   <button
                     type="button"
@@ -5274,6 +5623,98 @@ const compatibilityIssues = useMemo(
                   >
                     <span>📋</span> Usage History
                   </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    onClick={() => {
+                      openChemSnap()
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>📷</span> ChemSnap label intake
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    onClick={() => {
+                      printAveryLabels(chemicals)
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>🏷️</span> Print Avery 5160 labels
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    onClick={() => {
+                      openReorderPanel()
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>📦</span> Reorder / procurement
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    onClick={() => {
+                      setShowThresholdPanel(true)
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>🔥</span> Room flammable totals
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    onClick={() => {
+                      printEmergencyBinder()
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>🚨</span> Emergency binder PDF
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    onClick={() => {
+                      startShelfAudit()
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>📱</span> Shelf audit (scan walk)
+                  </button>
+                  {canAddChemicals && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="header-menu-item"
+                      onClick={() => {
+                        loadDemoData()
+                        setHeaderMenuOpen(false)
+                      }}
+                    >
+                      <span>🧪</span> Load demo chemicals
+                    </button>
+                  )}
+                  {offlineQueueCount > 0 && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="header-menu-item"
+                      onClick={() => {
+                        flushOfflineUsageQueue()
+                        setHeaderMenuOpen(false)
+                      }}
+                    >
+                      <span>☁️</span> Sync offline usage ({offlineQueueCount})
+                    </button>
+                  )}
                   <button
                     type="button"
                     role="menuitem"
@@ -5436,7 +5877,8 @@ const compatibilityIssues = useMemo(
                     <span>⚠️</span> Delete account…
                   </button>
                   )}
-                </div>
+                </div>,
+                document.body
               )}
             </div>
           </div>
@@ -7521,6 +7963,7 @@ const compatibilityIssues = useMemo(
                             <button className="link-btn" onClick={() => handleDownloadSds(chem.id)}>
                               📄 {chem.sds_filename.split('/').pop()}
                             </button>
+                            {canManageOrg && (
                             <label className="replace-label">
                               Replace
                               <input
@@ -7532,9 +7975,12 @@ const compatibilityIssues = useMemo(
                                 }
                               />
                             </label>
+                            )}
                           </div>
                         ) : (
                           <label className="upload-label">
+                            {canManageOrg ? (
+                              <>
                             + Upload SDS
                             <input
                               type="file"
@@ -7544,6 +7990,10 @@ const compatibilityIssues = useMemo(
                                 e.target.files?.[0] && handleSdsUpload(chem.id, e.target.files[0])
                               }
                             />
+                              </>
+                            ) : (
+                              <span className="sds-missing">No SDS file</span>
+                            )}
                           </label>
                         )}
                       </div>
@@ -7724,7 +8174,7 @@ const compatibilityIssues = useMemo(
                                         >
                                           View SDS
                                         </button>
-                                        {canEditChemicals && (
+                                        {canManageOrg && (
                                           <label className="sds-link sds-link--muted">
                                             Replace
                                             <input
@@ -7750,7 +8200,7 @@ const compatibilityIssues = useMemo(
                                         >
                                           Open SDS
                                         </a>
-                                        {canEditChemicals && (
+                                        {canManageOrg && (
                                           <label className="sds-link sds-link--muted">
                                             PDF
                                             <input
@@ -7777,7 +8227,7 @@ const compatibilityIssues = useMemo(
                                         >
                                           PubChem
                                         </a>
-                                        {canEditChemicals && (
+                                        {canManageOrg && (
                                           <label className="sds-link sds-link--muted">
                                             Upload SDS
                                             <input
@@ -7794,7 +8244,7 @@ const compatibilityIssues = useMemo(
                                       </div>
                                     )}
                                     {sds.kind === 'none' && (
-                                      canEditChemicals ? (
+                                      canManageOrg ? (
                                         <label className="sds-link sds-link--upload">
                                           Upload
                                           <input
@@ -7808,7 +8258,7 @@ const compatibilityIssues = useMemo(
                                           />
                                         </label>
                                       ) : (
-                                        <span className="sds-missing">No SDS</span>
+                                        <span className="sds-missing">No SDS on file</span>
                                       )
                                     )}
                                     {prov && (
@@ -8040,30 +8490,207 @@ const compatibilityIssues = useMemo(
 
       {/* ===================== SCANNER MODAL ===================== */}
       {showScanner && (
-        <div className="modal-overlay" onClick={stopScanner}>
-          <div className="modal" style={{ maxWidth: 400 }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Scan Barcode / QR</h3>
-              <button className="icon-btn" onClick={stopScanner}>
-                ✕
-              </button>
+        <div className="modal-overlay wizard-overlay" onClick={stopScanner}>
+          <div className="modal-card wizard-card" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <div className="wizard-header">
+              <div className="wizard-header-text">
+                <p className="wizard-kicker">Hardware-free</p>
+                <h3>Scan barcode / QR</h3>
+              </div>
+              <button type="button" className="wizard-close" onClick={stopScanner}>×</button>
             </div>
-            <div id="qr-reader" style={{ width: '100%' }} />
-            {scanResult && (
-              <p style={{ marginTop: 12, textAlign: 'center' }}>
-                Scanned: <strong>{scanResult}</strong>
+            <div className="wizard-body">
+              <label className="wizard-field">
+                <span>Target location (optional — live compatibility)</span>
+                <input
+                  className="wizard-input"
+                  placeholder="e.g. Main / LB 22 / Cabinet 3"
+                  value={scanTargetLocation}
+                  onChange={(e) => setScanTargetLocation(e.target.value)}
+                />
+              </label>
+              <label className="scan-continuous">
+                <input
+                  type="checkbox"
+                  checked={continuousScan}
+                  onChange={(e) => setContinuousScan(e.target.checked)}
+                />
+                Continuous scan (keep camera open)
+              </label>
+              <div id="qr-reader" style={{ width: '100%', marginTop: 10 }} />
+              {scanResult && (
+                <p className="scan-result-line">
+                  Last scan: <strong>{scanResult}</strong>
+                </p>
+              )}
+              <p className="wizard-lead">
+                Phone camera only — no handheld scanner required. Incompatible cabinet mates trigger an alert when a target location is set.
               </p>
-            )}
-            <p
-              style={{
-                fontSize: '0.85rem',
-                color: 'var(--text-muted)',
-                marginTop: 12,
-                textAlign: 'center',
-              }}
-            >
-              Point your camera at a barcode or QR code on a bottle.
-            </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ChemSnap AI-assisted intake */}
+      {showChemSnap && (
+        <div className="modal-overlay wizard-overlay" onClick={() => setShowChemSnap(false)}>
+          <div className="modal-card wizard-card" style={{ maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
+            <div className="wizard-header">
+              <div className="wizard-header-text">
+                <p className="wizard-kicker">ChemSnap</p>
+                <h3>Label intake</h3>
+              </div>
+              <button type="button" className="wizard-close" onClick={() => setShowChemSnap(false)}>×</button>
+            </div>
+            <div className="wizard-body">
+              <p className="wizard-lead">
+                Snap or upload a bottle label photo, then paste any OCR text (or type what you see).
+                We extract CAS, name, supplier, and qty hints, then open Add Chemical for confirmation + PubChem.
+              </p>
+              <label className="wizard-field">
+                <span>Label photo (optional)</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="wizard-input"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    if (!f) return
+                    const url = URL.createObjectURL(f)
+                    setChemSnapImageUrl(url)
+                  }}
+                />
+              </label>
+              {chemSnapImageUrl && (
+                <img src={chemSnapImageUrl} alt="Label preview" className="chemsnap-preview-img" />
+              )}
+              <label className="wizard-field">
+                <span>Label text (from OCR app or typed)</span>
+                <textarea
+                  className="wizard-input wizard-textarea"
+                  rows={5}
+                  placeholder="Paste text from Google Lens / device OCR, or type name and CAS…"
+                  value={chemSnapText}
+                  onChange={(e) => setChemSnapText(e.target.value)}
+                />
+              </label>
+              <div className="wizard-actions" style={{ justifyContent: 'flex-start' }}>
+                <button type="button" className="btn btn-ghost" onClick={applyChemSnapParse}>
+                  Extract fields
+                </button>
+              </div>
+              {chemSnapPreview && (
+                <div className="chemsnap-draft">
+                  <div><strong>Name:</strong> {chemSnapPreview.name || '—'}</div>
+                  <div><strong>CAS:</strong> {chemSnapPreview.cas_number || '—'}</div>
+                  <div><strong>Supplier:</strong> {chemSnapPreview.supplier || '—'}</div>
+                  <div><strong>Qty:</strong> {chemSnapPreview.quantity || '—'} {chemSnapPreview.unit}</div>
+                  <div><strong>Lot:</strong> {chemSnapPreview.batch_lot || '—'}</div>
+                </div>
+              )}
+              <div className="wizard-actions">
+                <button type="button" className="btn btn-ghost" onClick={() => setShowChemSnap(false)}>Cancel</button>
+                <button type="button" className="btn btn-primary" onClick={commitChemSnapToForm}>
+                  Continue to form
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reorder / procurement */}
+      {showReorderPanel && (
+        <div className="modal-overlay wizard-overlay" onClick={() => setShowReorderPanel(false)}>
+          <div className="modal-card wizard-card" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+            <div className="wizard-header">
+              <div className="wizard-header-text">
+                <p className="wizard-kicker">Procurement</p>
+                <h3>Reorder below minimum</h3>
+              </div>
+              <button type="button" className="wizard-close" onClick={() => setShowReorderPanel(false)}>×</button>
+            </div>
+            <div className="wizard-body">
+              <p className="wizard-lead">
+                Vendor-agnostic request list for chemicals at or below min stock. Print or send to your purchasing agent — not locked to a marketplace.
+              </p>
+              <ul className="reorder-list">
+                {buildReorderLines(chemicals || []).length === 0 ? (
+                  <li className="text-muted">All stocked items are above minimum.</li>
+                ) : (
+                  buildReorderLines(chemicals || []).map((l) => (
+                    <li key={l.id}>
+                      <strong>{l.name}</strong>
+                      <span className="text-muted">
+                        {' '}· on hand {l.quantity_on_hand} {l.unit} · min {l.min_stock} · order ~{l.suggested_order}
+                      </span>
+                    </li>
+                  ))
+                )}
+              </ul>
+              <div className="wizard-actions">
+                <button type="button" className="btn btn-ghost" onClick={() => setShowReorderPanel(false)}>Close</button>
+                <button type="button" className="btn btn-primary" onClick={printReorderRequest}>
+                  Print / PDF request
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Room hazard thresholds */}
+      {showThresholdPanel && (
+        <div className="modal-overlay wizard-overlay" onClick={() => setShowThresholdPanel(false)}>
+          <div className="modal-card wizard-card" style={{ maxWidth: 520 }} onClick={(e) => e.stopPropagation()}>
+            <div className="wizard-header">
+              <div className="wizard-header-text">
+                <p className="wizard-kicker">Safety limits</p>
+                <h3>Room flammable totals</h3>
+              </div>
+              <button type="button" className="wizard-close" onClick={() => setShowThresholdPanel(false)}>×</button>
+            </div>
+            <div className="wizard-body">
+              <p className="wizard-lead">
+                Advisory rollup by location prefix (not a legal determination). Set a soft limit to highlight rooms approaching your internal policy.
+              </p>
+              <label className="wizard-field">
+                <span>Soft limit (sum of qty units — configure to match your policy)</span>
+                <input
+                  type="number"
+                  className="wizard-input"
+                  value={flammableRoomLimit}
+                  onChange={(e) => {
+                    const n = Number(e.target.value) || 0
+                    setFlammableRoomLimit(n)
+                    try {
+                      localStorage.setItem('flammableRoomLimit', String(n))
+                    } catch {
+                      /* ignore */
+                    }
+                  }}
+                />
+              </label>
+              <ul className="reorder-list">
+                {thresholdRows.length === 0 ? (
+                  <li className="text-muted">No flammable-class quantities found.</li>
+                ) : (
+                  thresholdRows.map((r) => (
+                    <li key={r.room} className={r.total >= flammableRoomLimit ? 'threshold-hit' : ''}>
+                      <strong>{r.room}</strong>
+                      <span>
+                        {' '}· total ≈ {Math.round(r.total * 100) / 100} ({r.items.length} containers)
+                        {r.total >= flammableRoomLimit ? ' · over soft limit' : ''}
+                      </span>
+                    </li>
+                  ))
+                )}
+              </ul>
+              <div className="wizard-actions">
+                <button type="button" className="btn btn-primary" onClick={() => setShowThresholdPanel(false)}>Done</button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -8658,20 +9285,53 @@ const compatibilityIssues = useMemo(
 
       {/* ========== RECEIVE WIZARD ========== */}
       {showReceiveWizard && (
-        <div className="modal-overlay" onClick={() => setShowReceiveWizard(false)}>
-          <div className="modal-card" style={{ maxWidth: 440 }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3 style={{ margin: 0 }}>Receive chemical</h3>
-              <button type="button" className="icon-btn" onClick={() => setShowReceiveWizard(false)}>✕</button>
+        <div className="modal-overlay wizard-overlay" onClick={() => setShowReceiveWizard(false)}>
+          <div
+            className="modal-card wizard-card"
+            role="dialog"
+            aria-labelledby="receive-wizard-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="wizard-header">
+              <div className="wizard-header-text">
+                <p className="wizard-kicker">Workflow</p>
+                <h3 id="receive-wizard-title">Receive chemical</h3>
+              </div>
+              <button
+                type="button"
+                className="wizard-close"
+                aria-label="Close"
+                onClick={() => setShowReceiveWizard(false)}
+              >
+                ×
+              </button>
             </div>
-            <div className="modal-body" style={{ padding: 16 }}>
-              <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+            <div className="wizard-body">
+              <p className="wizard-lead">
                 Capture at receiving: identity, CAS, quantity, location, date received, and SDS.
                 Continues to the Add Chemical form with receive defaults.
               </p>
-              <button type="button" className="btn btn-primary" onClick={handleReceiveComplete}>
-                Start receiving form
-              </button>
+              <ul className="wizard-checklist">
+                <li>Name / CAS identity</li>
+                <li>Quantity and location path</li>
+                <li>Date received + SDS (or provisional)</li>
+              </ul>
+              <div className="wizard-actions">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setShowReceiveWizard(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleReceiveComplete}
+                >
+                  Start receiving form
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -8679,17 +9339,32 @@ const compatibilityIssues = useMemo(
 
       {/* ========== DISPOSE WIZARD ========== */}
       {showDisposeWizard && (
-        <div className="modal-overlay" onClick={() => setShowDisposeWizard(false)}>
-          <div className="modal-card" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3 style={{ margin: 0 }}>Dispose container</h3>
-              <button type="button" className="icon-btn" onClick={() => setShowDisposeWizard(false)}>✕</button>
+        <div className="modal-overlay wizard-overlay" onClick={() => setShowDisposeWizard(false)}>
+          <div
+            className="modal-card wizard-card"
+            role="dialog"
+            aria-labelledby="dispose-wizard-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="wizard-header">
+              <div className="wizard-header-text">
+                <p className="wizard-kicker">Lifecycle</p>
+                <h3 id="dispose-wizard-title">Dispose container</h3>
+              </div>
+              <button
+                type="button"
+                className="wizard-close"
+                aria-label="Close"
+                onClick={() => setShowDisposeWizard(false)}
+              >
+                ×
+              </button>
             </div>
-            <div className="modal-body" style={{ padding: 16, display: 'grid', gap: 10 }}>
-              <label className="profile-field">
+            <div className="wizard-body wizard-body--form">
+              <label className="wizard-field">
                 <span>Chemical</span>
                 <select
-                  className="search-input"
+                  className="wizard-input"
                   value={disposeChemId}
                   onChange={(e) => setDisposeChemId(e.target.value)}
                 >
@@ -8703,10 +9378,10 @@ const compatibilityIssues = useMemo(
                     ))}
                 </select>
               </label>
-              <label className="profile-field">
+              <label className="wizard-field">
                 <span>Reason</span>
                 <select
-                  className="search-input"
+                  className="wizard-input"
                   value={disposeReason}
                   onChange={(e) => setDisposeReason(e.target.value)}
                 >
@@ -8717,18 +9392,23 @@ const compatibilityIssues = useMemo(
                   <option value="other">Other</option>
                 </select>
               </label>
-              <label className="profile-field">
+              <label className="wizard-field">
                 <span>Notes</span>
                 <input
-                  className="search-input"
+                  className="wizard-input"
                   value={disposeNotes}
                   onChange={(e) => setDisposeNotes(e.target.value)}
                   placeholder="Waste stream, manifest #…"
                 />
               </label>
-              <button type="button" className="btn btn-primary" onClick={handleDisposeConfirm}>
-                Confirm dispose
-              </button>
+              <div className="wizard-actions">
+                <button type="button" className="btn btn-ghost" onClick={() => setShowDisposeWizard(false)}>
+                  Cancel
+                </button>
+                <button type="button" className="btn btn-primary" onClick={handleDisposeConfirm}>
+                  Confirm dispose
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -8736,17 +9416,32 @@ const compatibilityIssues = useMemo(
 
       {/* ========== TRANSFER WIZARD ========== */}
       {showTransferWizard && (
-        <div className="modal-overlay" onClick={() => setShowTransferWizard(false)}>
-          <div className="modal-card" style={{ maxWidth: 480 }} onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3 style={{ margin: 0 }}>Transfer container</h3>
-              <button type="button" className="icon-btn" onClick={() => setShowTransferWizard(false)}>✕</button>
+        <div className="modal-overlay wizard-overlay" onClick={() => setShowTransferWizard(false)}>
+          <div
+            className="modal-card wizard-card"
+            role="dialog"
+            aria-labelledby="transfer-wizard-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="wizard-header">
+              <div className="wizard-header-text">
+                <p className="wizard-kicker">Lifecycle</p>
+                <h3 id="transfer-wizard-title">Transfer container</h3>
+              </div>
+              <button
+                type="button"
+                className="wizard-close"
+                aria-label="Close"
+                onClick={() => setShowTransferWizard(false)}
+              >
+                ×
+              </button>
             </div>
-            <div className="modal-body" style={{ padding: 16, display: 'grid', gap: 10 }}>
-              <label className="profile-field">
+            <div className="wizard-body wizard-body--form">
+              <label className="wizard-field">
                 <span>Chemical</span>
                 <select
-                  className="search-input"
+                  className="wizard-input"
                   value={transferChemId}
                   onChange={(e) => setTransferChemId(e.target.value)}
                 >
@@ -8760,26 +9455,31 @@ const compatibilityIssues = useMemo(
                     ))}
                 </select>
               </label>
-              <label className="profile-field">
+              <label className="wizard-field">
                 <span>Destination (site / lab)</span>
                 <input
-                  className="search-input"
+                  className="wizard-input"
                   value={transferDest}
                   onChange={(e) => setTransferDest(e.target.value)}
                   placeholder="e.g. North Campus / Lab B"
                 />
               </label>
-              <label className="profile-field">
+              <label className="wizard-field">
                 <span>Notes</span>
                 <input
-                  className="search-input"
+                  className="wizard-input"
                   value={transferNotes}
                   onChange={(e) => setTransferNotes(e.target.value)}
                 />
               </label>
-              <button type="button" className="btn btn-primary" onClick={handleTransferConfirm}>
-                Confirm transfer
-              </button>
+              <div className="wizard-actions">
+                <button type="button" className="btn btn-ghost" onClick={() => setShowTransferWizard(false)}>
+                  Cancel
+                </button>
+                <button type="button" className="btn btn-primary" onClick={handleTransferConfirm}>
+                  Confirm transfer
+                </button>
+              </div>
             </div>
           </div>
         </div>
