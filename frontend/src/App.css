@@ -7250,3 +7250,152 @@ textarea {
   color: #fde68a;
   border-color: #a16207;
 }
+
+
+/* —— Professional header layout —— */
+.app-header {
+  display: flex !important;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px !important;
+  padding: 10px 16px !important;
+  row-gap: 10px;
+}
+.app-header .brand {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.app-header .brand-tagline {
+  font-size: 0.72rem !important;
+  color: var(--text-muted) !important;
+  letter-spacing: 0.01em;
+}
+.header-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.header-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.tool-btn--scan {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px !important;
+  padding: 0 12px !important;
+  min-width: auto !important;
+  background: color-mix(in srgb, var(--primary, #2563eb) 12%, transparent) !important;
+  border-color: color-mix(in srgb, var(--primary, #2563eb) 28%, var(--border)) !important;
+  color: var(--primary, #2563eb) !important;
+  font-weight: 600 !important;
+}
+.tool-btn-label {
+  font-size: 0.8rem;
+}
+@media (max-width: 720px) {
+  .tool-btn-label { display: none; }
+}
+.header-primary-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.header-secondary-btn {
+  min-height: 36px;
+  border-radius: 999px !important;
+  font-size: 0.8rem !important;
+  font-weight: 600 !important;
+}
+.profile-security-note {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--primary, #2563eb) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--primary, #2563eb) 18%, var(--border));
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.profile-security-note strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+/* Inventory: reduce noise — tighter filter pills on desktop */
+.inventory-toolbar {
+  gap: 8px !important;
+}
+
+
+/* Google SSO on Login */
+.auth-sso {
+  margin-top: 18px;
+  text-align: center;
+}
+.auth-sso-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  color: var(--text-muted, #64748b);
+  font-size: 0.8rem;
+}
+.auth-sso-divider::before,
+.auth-sso-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border, #e2e8f0);
+}
+.auth-sso-google {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 46px;
+  padding: 0 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border, #e2e8f0);
+  background: var(--card, #fff);
+  color: var(--text, #0f172a);
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+.auth-sso-google:hover:not(:disabled) {
+  background: var(--bg, #f8fafc);
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+}
+.auth-sso-google:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+.auth-sso-google-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.auth-sso-hint {
+  margin: 10px 0 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-muted, #64748b);
+}
+[data-theme="dark"] .auth-sso-google {
+  background: #151d2e;
+  border-color: #334155;
+  color: #e8eef7;
+}
+[data-theme="dark"] .auth-sso-google:hover:not(:disabled) {
+  background: #1e293b;
+}

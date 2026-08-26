@@ -2283,6 +2283,22 @@ function App() {
           return next
         })
       }
+      // Powerful scan: surface the bottle and offer quick log when not auditing
+      try {
+        setSelectedIds(new Set([match.id]))
+      } catch {
+        /* ignore */
+      }
+      if (!shelfAuditMode && !continuousScan) {
+        const loc = match.location || '—'
+        const qty = `${match.quantity ?? '—'} ${match.unit || ''}`.trim()
+        const doLog = window.confirm(
+          `Found: ${match.name}\nCAS: ${match.cas_number || '—'}\nQty: ${qty}\nLocation: ${loc}\n\nLog usage now?`
+        )
+        if (doLog) {
+          openUsageModal(match)
+        }
+      }
       if (stopAfter && !continuousScan) {
         if (html5QrCodeRef.current) {
           html5QrCodeRef.current
@@ -2357,18 +2373,20 @@ function App() {
     setEditingId(null)
     setShowChemSnap(false)
     setShowForm(true)
-    showMessage('success', 'ChemSnap draft loaded — confirm fields and run PubChem auto-fill')
-    // Best-effort PubChem if CAS present
-    if (draft.cas_number) {
-      try {
-        // reuse existing lookup if present after form opens
-        setTimeout(() => {
-          const casInput = document.getElementById('cas_number')
-          if (casInput) casInput.focus()
-        }, 200)
-      } catch {
-        /* ignore */
-      }
+    showMessage('success', 'ChemSnap draft loaded — running PubChem auto-fill…')
+    const q = (draft.cas_number || draft.name || '').trim()
+    if (q) {
+      setTimeout(async () => {
+        try {
+          const result = await lookupPubChem(q)
+          if (result) {
+            setFormData((prev) => applyPubChemToForm(prev, result, { force: false }))
+            showMessage('success', 'PubChem data applied — review and save')
+          }
+        } catch (e) {
+          console.warn('ChemSnap PubChem', e)
+        }
+      }, 300)
     }
   }
 
@@ -5542,15 +5560,26 @@ const compatibilityIssues = useMemo(
           </div>
           <div className="brand-text">
             <h1>Chemical Inventory</h1>
-            <span>Stock · Hazards · SDS · Compatibility · Free</span>
+            <span className="brand-tagline">Lab inventory · Free</span>
           </div>
         </div>
 
-        {/* Primary tools — keep critical actions visible */}
+        {/* Primary tools — scan, alerts, overflow */}
         <div className="header-tools">
           <div className="tool-group">
+            <button
+              type="button"
+              className="tool-btn tool-btn--scan"
+              onClick={() => startScanner()}
+              title="Scan barcode or QR"
+            >
+              <span aria-hidden="true">📷</span>
+              <span className="tool-btn-label">Scan</span>
+            </button>
+
             <div className="notif-wrapper" ref={notifRef}>
               <button
+                type="button"
                 className="tool-btn"
                 onClick={() => setNotifOpen((v) => !v)}
                 title="Notifications"
@@ -5560,18 +5589,7 @@ const compatibilityIssues = useMemo(
               </button>
             </div>
 
-            <button
-              className="tool-btn"
-              onClick={() => setCompatOpen(true)}
-              title="Compatibility Checker"
-            >
-              ⚠️
-              {compatibilityIssues.length > 0 && (
-                <span className="badge">{compatibilityIssues.length}</span>
-              )}
-            </button>
-
-            {/* Overflow menu (⋯) — high z-index so it sits above search/toolbar */}
+            {/* Overflow menu */}
             <div
               className="header-menu-wrapper"
               ref={headerMenuRef}
@@ -5765,7 +5783,7 @@ const compatibilityIssues = useMemo(
                             setHeaderMenuOpen(false)
                           }}
                         >
-                          <span>🏢</span> Create organization
+                          <span>🏢</span> Create Lab/organization
                         </button>
                       )}
                       {activeOrgId && canInviteMembers && (
@@ -6038,15 +6056,26 @@ const compatibilityIssues = useMemo(
           </button>
 
           {canAddChemicals && (
-          <button
-            className="primary-btn"
-            onClick={() => {
-              resetForm()
-              setShowForm(true)
-            }}
-          >
-            + Add Chemical
-          </button>
+          <div className="header-primary-actions">
+            <button
+              type="button"
+              className="btn btn-ghost header-secondary-btn"
+              onClick={() => openChemSnap()}
+              title="Photo / paste label → auto-fill"
+            >
+              ChemSnap
+            </button>
+            <button
+              type="button"
+              className="primary-btn"
+              onClick={() => {
+                resetForm()
+                setShowForm(true)
+              }}
+            >
+              + Add
+            </button>
+          </div>
         )}
         </div>
       </header>
@@ -6947,7 +6976,19 @@ const compatibilityIssues = useMemo(
                         name="cas_number"
                         value={formData.cas_number}
                         onChange={handleChange}
-                        placeholder="Auto from name, or type CAS"
+                        onBlur={async () => {
+                          const q = (formData.cas_number || '').trim()
+                          if (!q || q.length < 5) return
+                          try {
+                            const result = await lookupPubChem(q)
+                            if (result) {
+                              setFormData((prev) => applyPubChemToForm(prev, result, { force: false }))
+                            }
+                          } catch {
+                            /* ignore */
+                          }
+                        }}
+                        placeholder="CAS — auto-fills on blur"
                       />
                     </div>
 
@@ -9782,35 +9823,14 @@ const compatibilityIssues = useMemo(
 
               <hr style={{ margin: '18px 0', border: 0, borderTop: '1px solid var(--border)' }} />
 
-              <h4 style={{ margin: '0 0 8px' }}>Enterprise SSO</h4>
-              <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 0 }}>
-                Requires the provider enabled in Supabase Auth (Google, Azure, etc.).
-              </p>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  disabled={ssoBusy}
-                  onClick={() => handleSsoProvider('google')}
-                >
-                  Google
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  disabled={ssoBusy}
-                  onClick={() => handleSsoProvider('azure')}
-                >
-                  Microsoft
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  disabled={ssoBusy}
-                  onClick={() => handleSsoProvider('github')}
-                >
-                  GitHub
-                </button>
+              <div className="profile-security-note">
+                <strong>Account security</strong>
+                <p>
+                  Use a unique password (8+ characters with a letter and a number).
+                  After an invite, change the temporary password here.
+                  Prefer Google? Sign out and use <strong>Continue with Google</strong> on the login page
+                  (requires Google enabled in Supabase Auth → Providers).
+                </p>
               </div>
 
               <h4 style={{ margin: '0 0 8px' }}>Sessions</h4>
