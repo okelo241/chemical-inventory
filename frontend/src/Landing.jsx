@@ -875,11 +875,9 @@ function Landing({ onGetStarted }) {
           {/* Peroxides */}
           <div className="guide-block">
             <h3>Peroxide-forming chemicals</h3>
-            <p className="block-intro">
-              Ethers, THF, dioxane, secondary alcohols, and some unsaturated compounds can form explosive
-              peroxides on aging, especially when opened and exposed to air/light.
-            </p>
             <ul className="tips-list">
+              <li>Ethers, THF, dioxane, secondary alcohols, and some unsaturated compounds can form explosive
+              peroxides on aging, especially when opened and exposed to air/light.</li> 
               <li>Buy the smallest practical size; prefer inhibitors when available.</li>
               <li>Store in airtight containers, away from light and heat; do not refrigerate in ways that allow moisture condensation into the bottle.</li>
               <li>Test on a documented schedule; dispose if visual crystals form or tests exceed limits — never distill to dryness.</li>
