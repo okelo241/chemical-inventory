@@ -1632,6 +1632,8 @@ function App() {
   const [labUnits, setLabUnits] = useState(() => loadJsonStorage(LAB_UNITS_STORAGE_KEY, []))
   const [activeLabUnit, setActiveLabUnit] = useState(() => localStorage.getItem('activeLabUnit') || '')
   const [scanActionMode, setScanActionMode] = useState('find') // find | take | return
+  const [showFirstResponder, setShowFirstResponder] = useState(false)
+  const [bulkLocationValue, setBulkLocationValue] = useState('')
   const [autoEnrichBusy, setAutoEnrichBusy] = useState(false)
 
   /* ---------- Refs ---------- */
