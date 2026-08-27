@@ -53,6 +53,7 @@ import {
   loadOfflineUsageQueue,
   saveOfflineUsageQueue,
   enqueueOfflineUsage,
+  enqueueOfflineScanLog,
 } from './competitiveFeatures'
 
 /* -------------------------------------------------------------------------- */
@@ -1500,6 +1501,10 @@ function App() {
   const [shelfAuditMode, setShelfAuditMode] = useState(false)
   const [shelfAuditFound, setShelfAuditFound] = useState(() => new Set())
   const [offlineQueueCount, setOfflineQueueCount] = useState(0)
+  const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null)
+  const [showInstallBanner, setShowInstallBanner] = useState(false)
+  const [isStandalone, setIsStandalone] = useState(false)
+
 
   const [flammableRoomLimit, setFlammableRoomLimit] = useState(() => {
     try {
@@ -2283,20 +2288,28 @@ function App() {
           return next
         })
       }
-      // Powerful scan: surface the bottle and offer quick log when not auditing
       try {
         setSelectedIds(new Set([match.id]))
       } catch {
         /* ignore */
       }
-      if (!shelfAuditMode && !continuousScan) {
-        const loc = match.location || '—'
-        const qty = `${match.quantity ?? '—'} ${match.unit || ''}`.trim()
-        const doLog = window.confirm(
-          `Found: ${match.name}\nCAS: ${match.cas_number || '—'}\nQty: ${qty}\nLocation: ${loc}\n\nLog usage now?`
-        )
-        if (doLog) {
-          openUsageModal(match)
+      if (!shelfAuditMode) {
+        if (scanActionMode === 'take') {
+          quickLogUsage(match, 'take', 1, 'Scan take')
+        } else if (scanActionMode === 'return') {
+          quickLogUsage(match, 'return', 1, 'Scan return')
+        } else if (!continuousScan) {
+          const loc = match.location || '—'
+          const qty = `${match.quantity ?? '—'} ${match.unit || ''}`.trim()
+          const doLog = window.confirm(
+            `Found: ${match.name}
+CAS: ${match.cas_number || '—'}
+Qty: ${qty}
+Location: ${loc}
+
+Open usage form?`
+          )
+          if (doLog) openUsageModal(match)
         }
       }
       if (stopAfter && !continuousScan) {
@@ -2311,7 +2324,7 @@ function App() {
         setShowScanner(false)
       }
     },
-    [chemicals, continuousScan, evaluateScanCompatibility, scanTargetLocation, shelfAuditMode]
+    [chemicals, continuousScan, evaluateScanCompatibility, scanTargetLocation, shelfAuditMode, scanActionMode]
   )
 
   const startScanner = async () => {
@@ -2478,13 +2491,31 @@ function App() {
     const remaining = []
     for (const item of q) {
       try {
+        const payload = item.payload || item
+        // Apply quantity change first when we have a snapshot
+        const snap = payload._chemical_snapshot
+        if (snap?.id != null && snap.quantity != null) {
+          const chem = (chemicals || []).find((c) => String(c.id) === String(snap.id))
+          const body = chem
+            ? { ...chem, quantity: snap.quantity }
+            : { quantity: snap.quantity }
+          await fetch(`${API_URL}/chemicals/${snap.id}`, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(body),
+          })
+        }
+        const { _chemical_snapshot, ...txBody } = payload
         const res = await fetch(`${API_URL}/transactions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify(item.payload || item),
+          body: JSON.stringify(txBody),
         })
         if (!res.ok) remaining.push(item)
       } catch {
@@ -2494,8 +2525,13 @@ function App() {
     saveOfflineUsageQueue(remaining)
     setOfflineQueueCount(remaining.length)
     if (q.length !== remaining.length) {
-      showMessage('success', `Synced ${q.length - remaining.length} offline usage log(s)`)
-      fetchTransactions?.()
+      showMessage('success', `Synced ${q.length - remaining.length} offline scan/usage log(s)`)
+      fetchChemicals(true)
+      try {
+        fetchTransactions?.()
+      } catch {
+        /* ignore */
+      }
     }
   }
 
@@ -2522,6 +2558,59 @@ function App() {
     }
     return () => window.removeEventListener('online', onOnline)
   }, [session])
+
+  useEffect(() => {
+    try {
+      const standalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        window.navigator.standalone === true
+      setIsStandalone(!!standalone)
+    } catch {
+      setIsStandalone(false)
+    }
+    const onBip = (e) => {
+      e.preventDefault()
+      setDeferredInstallPrompt(e)
+      try {
+        if (localStorage.getItem('lci_hide_install') === '1') return
+      } catch {
+        /* ignore */
+      }
+      setShowInstallBanner(true)
+    }
+    window.addEventListener('beforeinstallprompt', onBip)
+    return () => window.removeEventListener('beforeinstallprompt', onBip)
+  }, [])
+
+  const handleInstallApp = async () => {
+    if (!deferredInstallPrompt) {
+      showMessage(
+        'success',
+        'On iPhone: Share → Add to Home Screen. On desktop Chrome: menu → Install app.'
+      )
+      return
+    }
+    try {
+      deferredInstallPrompt.prompt()
+      const choice = await deferredInstallPrompt.userChoice
+      if (choice?.outcome === 'accepted') {
+        showMessage('success', 'App installed — open from your home screen')
+      }
+    } catch (err) {
+      console.warn('install', err)
+    }
+    setDeferredInstallPrompt(null)
+    setShowInstallBanner(false)
+  }
+
+  const dismissInstallBanner = () => {
+    setShowInstallBanner(false)
+    try {
+      localStorage.setItem('lci_hide_install', '1')
+    } catch {
+      /* ignore */
+    }
+  }
 
 
   const printReorderRequest = () => {
@@ -4694,6 +4783,114 @@ const compatibilityIssues = useMemo(
   /* USAGE / TRANSACTION LOG                                                  */
   /* ======================================================================== */
 
+  const quickLogUsage = async (chemical, type = 'take', qty = 1, notes = 'Scan quick-log') => {
+    if (!chemical?.id) return false
+    const amount = Number(qty) || 1
+    if (amount <= 0) return false
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      enqueueOfflineScanLog({
+        chemical,
+        type,
+        quantity: amount,
+        user_email: session?.user?.email,
+        organization_id:
+          workspaceMode === 'organization' && activeOrgId ? activeOrgId : null,
+      })
+      setOfflineQueueCount(loadOfflineUsageQueue().length)
+      const change = type === 'return' ? amount : -amount
+      const newQ = Math.max(0, Number(chemical.quantity || 0) + change)
+      setChemicals((prev) =>
+        (prev || []).map((c) =>
+          String(c.id) === String(chemical.id) ? { ...c, quantity: newQ } : c
+        )
+      )
+      showMessage('warning', 'Offline — scan queued; will sync when online')
+      return true
+    }
+    try {
+      const token = await getAccessToken()
+      if (!token) return false
+      let change = type === 'return' ? amount : -amount
+      if (type === 'take' && amount > Number(chemical.quantity || 0)) {
+        showMessage('error', `Only ${chemical.quantity} ${chemical.unit || ''} on hand`)
+        return false
+      }
+      const newQuantity = Math.max(0, Number(chemical.quantity || 0) + change)
+      const updateResponse = await fetch(`${API_URL}/chemicals/${chemical.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ ...chemical, quantity: newQuantity }),
+      })
+      if (!updateResponse.ok) throw new Error('Quantity update failed')
+      const transactionPayload = {
+        chemical_id: chemical.id,
+        chemical_name: chemical.name,
+        type,
+        quantity_change: change,
+        quantity_before: Number(chemical.quantity || 0),
+        quantity_after: newQuantity,
+        unit: chemical.unit,
+        notes: notes || null,
+        user_email: session?.user?.email,
+        organization_id:
+          workspaceMode === 'organization' && activeOrgId ? activeOrgId : null,
+      }
+      try {
+        const txRes = await fetch(`${API_URL}/transactions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(transactionPayload),
+        })
+        if (!txRes.ok) {
+          enqueueOfflineUsage({
+            payload: {
+              ...transactionPayload,
+              _chemical_snapshot: { id: chemical.id, quantity: newQuantity },
+            },
+          })
+          setOfflineQueueCount(loadOfflineUsageQueue().length)
+        }
+      } catch {
+        enqueueOfflineUsage({
+          payload: {
+            ...transactionPayload,
+            _chemical_snapshot: { id: chemical.id, quantity: newQuantity },
+          },
+        })
+        setOfflineQueueCount(loadOfflineUsageQueue().length)
+      }
+      pushAudit('usage_log', {
+        chemical_id: chemical.id,
+        type,
+        quantity_change: change,
+        via: 'scan_quick',
+      })
+      showMessage(
+        'success',
+        type === 'return'
+          ? `Returned ${amount} ${chemical.unit || ''} · ${chemical.name}`
+          : `Took ${amount} ${chemical.unit || ''} · ${chemical.name}`
+      )
+      fetchChemicals(true)
+      try {
+        fetchTransactions?.()
+      } catch {
+        /* ignore */
+      }
+      return true
+    } catch (err) {
+      console.warn('quickLogUsage', err)
+      showMessage('error', 'Quick log failed')
+      return false
+    }
+  }
+
   const openUsageModal = (chemical) => {
     setUsageChem(chemical)
     setUsageForm({ type: 'take', quantity: '', notes: '' })
@@ -5553,6 +5750,22 @@ const compatibilityIssues = useMemo(
       )}
 
       {/* Header */}
+      {showInstallBanner && !isStandalone && (
+        <div className="install-banner" role="status">
+          <div className="install-banner-text">
+            <strong>Install Lab Inventory</strong>
+            <span>Add to your phone or desktop for faster scan & offline use.</span>
+          </div>
+          <div className="install-banner-actions">
+            <button type="button" className="btn btn-sm btn-primary" onClick={handleInstallApp}>
+              Install app
+            </button>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={dismissInstallBanner}>
+              Not now
+            </button>
+          </div>
+        </div>
+      )}
       <header className="app-header" style={{ position: 'relative', zIndex: 4000 }}>
         <div className="brand">
           <div className="brand-logo">
@@ -5560,7 +5773,7 @@ const compatibilityIssues = useMemo(
           </div>
           <div className="brand-text">
             <h1>Chemical Inventory</h1>
-            <span className="brand-tagline">Lab inventory · Free</span>
+            <span className="brand-tagline">Stock · Hazards · SDS · Compatibility</span>
           </div>
         </div>
 
@@ -5706,6 +5919,17 @@ const compatibilityIssues = useMemo(
                     role="menuitem"
                     className="header-menu-item"
                     onClick={() => {
+                      setShowFirstResponder(true)
+                      setHeaderMenuOpen(false)
+                    }}
+                  >
+                    <span>🚒</span> First-responder view
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="header-menu-item"
+                    onClick={() => {
                       startShelfAudit()
                       setHeaderMenuOpen(false)
                     }}
@@ -5735,7 +5959,20 @@ const compatibilityIssues = useMemo(
                         setHeaderMenuOpen(false)
                       }}
                     >
-                      <span>☁️</span> Sync offline usage ({offlineQueueCount})
+                      <span>☁️</span> Sync offline queue ({offlineQueueCount})
+                    </button>
+                  )}
+                  {!isStandalone && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="header-menu-item"
+                      onClick={() => {
+                        handleInstallApp()
+                        setHeaderMenuOpen(false)
+                      }}
+                    >
+                      <span>📲</span> Install app
                     </button>
                   )}
                   <button
@@ -5988,48 +6225,32 @@ const compatibilityIssues = useMemo(
 
           <button
             type="button"
-            className="user-pill"
+            className="user-pill user-pill--avatar-only"
             onClick={openProfileModal}
-            title="Open profile"
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 8,
-              cursor: 'pointer',
-              border: '1px solid var(--border, #e2e8f0)',
-              background: 'var(--panel, #fff)',
-              borderRadius: 999,
-              padding: '4px 10px 4px 4px',
-              maxWidth: 220,
-            }}
+            title={
+              session.user?.user_metadata?.full_name ||
+              session.user?.user_metadata?.name ||
+              session.user?.email ||
+              'Open profile'
+            }
+            aria-label="Open profile"
           >
             {(session.user?.user_metadata?.avatar_url ||
-              session.user?.user_metadata?.picture) ? (
+              session.user?.user_metadata?.picture ||
+              profileAvatar) ? (
               <img
+                className="user-pill-avatar"
                 src={
-                  session.user.user_metadata.avatar_url ||
-                  session.user.user_metadata.picture
+                  session.user?.user_metadata?.avatar_url ||
+                  session.user?.user_metadata?.picture ||
+                  profileAvatar
                 }
                 alt=""
-                width={28}
-                height={28}
-                style={{ borderRadius: '50%', objectFit: 'cover' }}
+                width={34}
+                height={34}
               />
             ) : (
-              <span
-                style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: '50%',
-                  background: 'linear-gradient(135deg,#2563eb,#7c3aed)',
-                  color: '#fff',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 12,
-                  fontWeight: 700,
-                }}
-              >
+              <span className="user-pill-initial">
                 {(
                   session.user?.user_metadata?.full_name ||
                   session.user?.user_metadata?.name ||
@@ -6041,19 +6262,6 @@ const compatibilityIssues = useMemo(
                   .toUpperCase()}
               </span>
             )}
-            <span
-              style={{
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                fontSize: '0.85rem',
-                fontWeight: 600,
-              }}
-            >
-              {session.user?.user_metadata?.full_name ||
-                session.user?.user_metadata?.name ||
-                session.user?.email}
-            </span>
           </button>
 
           <button className="ghost-btn" onClick={handleLogout}>
@@ -6913,9 +7121,59 @@ const compatibilityIssues = useMemo(
           {bulkMode && selectedIds.size > 0 && (
             <div className="bulk-bar">
               <span>{selectedIds.size} selected</span>
-              <button className="btn btn-danger btn-sm" onClick={handleBulkDelete}>
-                Delete Selected
+              <input
+                className="search-input bulk-loc-input"
+                placeholder="New location path…"
+                value={bulkLocationValue}
+                onChange={(e) => setBulkLocationValue(e.target.value)}
+              />
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                onClick={async () => {
+                  const loc = bulkLocationValue.trim()
+                  if (!loc) {
+                    showMessage('error', 'Enter a location path')
+                    return
+                  }
+                  if (!canEditChemicals) {
+                    showMessage('error', 'Members cannot bulk-edit locations')
+                    return
+                  }
+                  const token = await getAccessToken()
+                  if (!token) return
+                  let ok = 0
+                  for (const id of selectedIds) {
+                    const chem = chemicals.find((c) => String(c.id) === String(id))
+                    if (!chem) continue
+                    try {
+                      const res = await fetch(`${API_URL}/chemicals/${id}`, {
+                        method: 'PUT',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          Authorization: `Bearer ${token}`,
+                        },
+                        body: JSON.stringify({ ...chem, location: loc }),
+                      })
+                      if (res.ok) ok += 1
+                    } catch {
+                      /* continue */
+                    }
+                  }
+                  showMessage('success', `Updated location on ${ok} container(s)`)
+                  setBulkLocationValue('')
+                  setSelectedIds(new Set())
+                  setBulkMode(false)
+                  fetchChemicals(true)
+                }}
+              >
+                Move
               </button>
+              {canDeleteChemicals && (
+                <button className="btn btn-danger btn-sm" onClick={handleBulkDelete}>
+                  Delete
+                </button>
+              )}
               <button className="btn btn-ghost btn-sm" onClick={() => setSelectedIds(new Set())}>
                 Clear
               </button>
@@ -8535,6 +8793,67 @@ const compatibilityIssues = useMemo(
       )}
 
       {/* ===================== SCANNER MODAL ===================== */}
+      
+      {showFirstResponder && (
+        <div className="modal-overlay wizard-overlay" onClick={() => setShowFirstResponder(false)}>
+          <div
+            className="modal-card wizard-card"
+            style={{ maxWidth: 640 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="wizard-header">
+              <div className="wizard-header-text">
+                <p className="wizard-kicker">Emergency</p>
+                <h3>First-responder inventory</h3>
+              </div>
+              <button type="button" className="wizard-close" onClick={() => setShowFirstResponder(false)}>
+                ×
+              </button>
+            </div>
+            <div className="wizard-body">
+              <p className="wizard-lead">
+                Active containers by room (name, CAS, quantity, hazards, SDS). Print emergency binder for a full pack.
+              </p>
+              <div className="fr-list">
+                {(chemicals || [])
+                  .filter((c) => !c.archived)
+                  .slice()
+                  .sort((a, b) => String(a.location || '').localeCompare(String(b.location || '')))
+                  .map((c) => (
+                    <div key={c.id} className="fr-row">
+                      <div>
+                        <strong>{c.name}</strong>
+                        <span className="text-muted">
+                          {' '}
+                          · {c.cas_number || 'no CAS'} · {c.quantity} {c.unit}
+                        </span>
+                      </div>
+                      <div className="text-muted" style={{ fontSize: '0.8rem' }}>
+                        {c.location || 'Unassigned'}
+                        {(c.sds_url || c.sds_filename) ? ' · SDS' : ' · no SDS'}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+              <div className="wizard-actions">
+                <button type="button" className="btn btn-ghost" onClick={() => setShowFirstResponder(false)}>
+                  Close
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => {
+                    printEmergencyBinder()
+                  }}
+                >
+                  Print binder PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showScanner && (
         <div className="modal-overlay wizard-overlay" onClick={stopScanner}>
           <div className="modal-card wizard-card" style={{ maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
@@ -8546,6 +8865,29 @@ const compatibilityIssues = useMemo(
               <button type="button" className="wizard-close" onClick={stopScanner}>×</button>
             </div>
             <div className="wizard-body">
+              <div className="scan-mode-row" role="group" aria-label="Scan action">
+                {[
+                  { id: 'find', label: 'Find' },
+                  { id: 'take', label: 'Take 1' },
+                  { id: 'return', label: 'Return 1' },
+                ].map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    className={`scan-mode-btn ${scanActionMode === m.id ? 'active' : ''}`}
+                    onClick={() => setScanActionMode(m.id)}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+              <p className="wizard-lead" style={{ marginTop: 8, marginBottom: 8 }}>
+                {scanActionMode === 'take'
+                  ? 'Each scan logs a take of 1 unit (bench-speed usage).'
+                  : scanActionMode === 'return'
+                    ? 'Each scan logs a return of 1 unit.'
+                    : 'Find bottle, then optionally open the full usage form.'}
+              </p>
               <label className="wizard-field">
                 <span>Target location (optional — live compatibility)</span>
                 <input

@@ -451,3 +451,39 @@ export function buildGhsLabelHtml({ name, cas, signal, pictograms = [] }) {
   <p><button onclick="window.print()">Print</button></p>
 </body></html>`
 }
+
+
+/** Queue a scan-based usage action for later sync (includes quantity update) */
+export function enqueueOfflineScanLog({
+  chemical,
+  type = 'take',
+  quantity = 1,
+  user_email = null,
+  organization_id = null,
+}) {
+  const amount = Number(quantity) || 1
+  const before = Number(chemical?.quantity || 0)
+  const change = type === 'return' ? amount : -amount
+  const after = Math.max(0, before + change)
+  const entry = {
+    kind: 'scan_usage',
+    payload: {
+      chemical_id: chemical.id,
+      chemical_name: chemical.name,
+      type,
+      quantity_change: change,
+      quantity_before: before,
+      quantity_after: after,
+      unit: chemical.unit,
+      notes: 'Offline scan log',
+      user_email,
+      organization_id,
+      // enough to PATCH quantity when back online
+      _chemical_snapshot: {
+        id: chemical.id,
+        quantity: after,
+      },
+    },
+  }
+  return enqueueOfflineUsage(entry)
+}
