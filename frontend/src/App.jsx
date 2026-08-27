@@ -30,7 +30,7 @@
  */
 
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, Component } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from './supabase'
 import Login from './Login'
@@ -1351,6 +1351,64 @@ const buildCompatibilityIssues = (chemicalList) => {
 /* SECTION 10 — MAIN APP COMPONENT START                                      */
 /* ========================================================================== */
 
+
+class AppErrorBoundary extends Component {
+  constructor(props) {
+    super(props)
+    this.state = { error: null }
+  }
+  static getDerivedStateFromError(error) {
+    return { error }
+  }
+  componentDidCatch(error, info) {
+    console.error('App crash:', error, info)
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{
+          minHeight: '100vh',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 24,
+          fontFamily: 'system-ui, sans-serif',
+          background: '#0f172a',
+          color: '#e2e8f0',
+        }}>
+          <div style={{ maxWidth: 480, textAlign: 'center' }}>
+            <h1 style={{ fontSize: '1.25rem', marginBottom: 8 }}>Something went wrong</h1>
+            <p style={{ color: '#94a3b8', fontSize: '0.9rem', marginBottom: 16 }}>
+              {String(this.state.error?.message || this.state.error)}
+            </p>
+            <p style={{ color: '#64748b', fontSize: '0.8rem', marginBottom: 16 }}>
+              If you just deployed, confirm <code>src/competitiveFeatures.js</code> is present
+              and hard-refresh (Ctrl+Shift+R). Check the browser console for details.
+            </p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              style={{
+                padding: '10px 18px',
+                borderRadius: 10,
+                border: 0,
+                background: '#2563eb',
+                color: '#fff',
+                fontWeight: 600,
+                cursor: 'pointer',
+              }}
+            >
+              Reload
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
+
 function App() {
   /* ---------- Authentication ---------- */
   const [session, setSession] = useState(null)
@@ -2294,9 +2352,9 @@ function App() {
         /* ignore */
       }
       if (!shelfAuditMode) {
-        if (scanActionMode === 'take') {
+        if (scanActionMode === 'take' && typeof quickLogUsage === 'function') {
           quickLogUsage(match, 'take', 1, 'Scan take')
-        } else if (scanActionMode === 'return') {
+        } else if (scanActionMode === 'return' && typeof quickLogUsage === 'function') {
           quickLogUsage(match, 'return', 1, 'Scan return')
         } else if (!continuousScan) {
           const loc = match.location || '—'
@@ -10258,4 +10316,12 @@ const compatibilityIssues = useMemo(
   )
 }
 
-export default App
+function RootApp(props) {
+  return (
+    <AppErrorBoundary>
+      <App {...props} />
+    </AppErrorBoundary>
+  )
+}
+
+export default RootApp
