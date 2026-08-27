@@ -7665,3 +7665,28 @@ textarea {
   gap: 8px;
   flex-shrink: 0;
 }
+
+
+/* Header: brand clean on the left; Scan with actions on the right */
+.header-tools--meta {
+  margin-left: 8px !important;
+  margin-right: auto !important;
+}
+.app-header .brand {
+  margin-right: 4px !important;
+}
+.header-primary-actions {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 8px !important;
+}
+.header-scan-btn {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px !important;
+}
+@media (max-width: 900px) {
+  .header-tools--meta {
+    order: 2;
+  }
+}

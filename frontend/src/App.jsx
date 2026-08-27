@@ -5837,19 +5837,9 @@ const compatibilityIssues = useMemo(
           </div>
         </div>
 
-        {/* Primary tools — clearly separated: Scan | Alerts | More */}
-        <div className="header-tools">
+        {/* Alerts + More only — Scan lives with primary actions on the right */}
+        <div className="header-tools header-tools--meta">
           <div className="tool-group tool-group--cluster">
-            <button
-              type="button"
-              className="tool-btn tool-btn--scan"
-              onClick={() => startScanner()}
-              title="Scan barcode or QR"
-            >
-              <span className="tool-btn-ico" aria-hidden="true">📷</span>
-              <span className="tool-btn-label">Scan</span>
-            </button>
-
             <div className="notif-wrapper" ref={notifRef}>
               <button
                 type="button"
@@ -6328,28 +6318,38 @@ const compatibilityIssues = useMemo(
             Logout
           </button>
 
-          {canAddChemicals && (
           <div className="header-primary-actions">
             <button
               type="button"
-              className="btn btn-ghost header-secondary-btn"
-              onClick={() => openChemSnap()}
-              title="Photo / paste label → auto-fill"
+              className="btn btn-ghost header-secondary-btn header-scan-btn"
+              onClick={() => startScanner()}
+              title="Scan barcode or QR"
             >
-              ChemSnap
+              <span aria-hidden="true">📷</span> Scan
             </button>
-            <button
-              type="button"
-              className="primary-btn"
-              onClick={() => {
-                resetForm()
-                setShowForm(true)
-              }}
-            >
-              + Add
-            </button>
+            {canAddChemicals && (
+              <button
+                type="button"
+                className="btn btn-ghost header-secondary-btn"
+                onClick={() => openChemSnap()}
+                title="Photo / paste label → auto-fill"
+              >
+                ChemSnap
+              </button>
+            )}
+            {canAddChemicals && (
+              <button
+                type="button"
+                className="primary-btn"
+                onClick={() => {
+                  resetForm()
+                  setShowForm(true)
+                }}
+              >
+                + Add
+              </button>
+            )}
           </div>
-        )}
         </div>
       </header>
 
